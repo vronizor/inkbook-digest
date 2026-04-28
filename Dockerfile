@@ -4,7 +4,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        tzdata fonts-dejavu-core \
+        tzdata fonts-dejavu-core sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
