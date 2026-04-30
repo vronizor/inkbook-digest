@@ -16,4 +16,4 @@ COPY src ./src
 
 RUN uv pip install --system --no-cache .
 
-CMD ["python", "-m", "digest.main"]
+CMD ["uvicorn", "digest.main:app", "--host", "0.0.0.0", "--port", "8080"]

@@ -37,6 +37,8 @@ class Config:
     data_dir: Path
     log_level: str
 
+    word_budget: int
+
 
 def load(*, require_smtp: bool = True) -> Config:
     required = REQUIRED_ALWAYS + (REQUIRED_FOR_SEND if require_smtp else ())
@@ -66,6 +68,7 @@ def load(*, require_smtp: bool = True) -> Config:
             image_soft_cap_mb=int(os.environ.get("IMAGE_SOFT_CAP_MB", "10")),
             data_dir=Path(os.environ.get("DATA_DIR", "/data")),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
+            word_budget=int(os.environ.get("WORD_BUDGET", "5000")),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)

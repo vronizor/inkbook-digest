@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>inkbook-digest</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<header>
+  <h1>Morning Paper</h1>
+  <div class="actions">
+    <form method="post" action="/pause" class="inline">
+      <button type="submit" class="btn-pause">{% if paused %}Resume{% else %}Pause{% endif %}</button>
+    </form>
+    <form method="post" action="/trigger" class="inline">
+      <button type="submit"{% if is_running %} disabled{% endif %}>Trigger</button>
+    </form>
+  </div>
+</header>
+
+{% if triggered == "ok" %}
+  <div class="flash flash-info">Run started — check the runs table in a few seconds.</div>
+{% elif triggered == "already_running" %}
+  <div class="flash flash-warn">A run is already in progress.</div>
+{% endif %}
+
+<section class="summary">
+  <h2>Status</h2>
+  <dl>
+    <dt>Last digest</dt>
+    <dd>
+      {% if last_digest %}
+        <span class="ts">{{ last_digest[0] }}</span> · {{ last_digest[1] }} article{{ "s" if last_digest[1] != 1 else "" }} · {{ "{:,}".format(last_digest[3]) }} words{% if last_digest[2] > 1 %} · Vol. {{ last_digest[2] }}{% endif %}
+      {% else %}
+        <em class="no-data">no data yet</em>
+      {% endif %}
+    </dd>
+
+    <dt>Next run</dt>
+    <dd>
+      {% if paused %}
+        <span class="error">paused</span>
+      {% elif next_run %}
+        <span class="ts">{{ next_run }}</span>
+      {% else %}
+        <em class="no-data">not scheduled</em>
+      {% endif %}
+    </dd>
+
+    <dt>Queue</dt>
+    <dd>
+      {% if queue_stats is not none %}
+        {{ queue_stats.count }} article{{ "s" if queue_stats.count != 1 else "" }}, ~{{ "{:,}".format(queue_stats.total_words) }} words
+      {% else %}
+        <span class="error">unavailable</span>{% if queue_error %} <small class="error">({{ queue_error }})</small>{% endif %}
+      {% endif %}
+    </dd>
+
+    <dt>Total sent</dt>
+    <dd>{{ "{:,}".format(totals.articles) }} article{{ "s" if totals.articles != 1 else "" }}, {{ "{:,}".format(totals.words) }} words across {{ totals.digests }} digest{{ "s" if totals.digests != 1 else "" }}</dd>
+  </dl>
+</section>
+
+<section class="chart-section">
+  <h2>Articles per day, last 30 days</h2>
+  <canvas id="chart" height="120"></canvas>
+</section>
+
+<section>
+  <h2>Recent digests</h2>
+  {% if digests %}
+  <table>
+    <thead><tr><th>Date</th><th>Vol</th><th>Articles</th><th>Words</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for d in digests %}
+      <tr>
+        <td class="ts">{{ d.sent_at }}</td>
+        <td>{{ d.volume }}</td>
+        <td>{{ d.article_count }}</td>
+        <td>{{ "{:,}".format(d.total_words) }}</td>
+        <td class="status-{{ d.status }}">{{ d.status }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="no-data">no data yet</p>{% endif %}
+</section>
+
+<section>
+  <h2>Recent runs</h2>
+  {% if runs %}
+  <table>
+    <thead><tr><th>Started</th><th>Outcome</th><th>Duration</th><th>Log</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td class="ts">{{ r.started_at }}</td>
+        <td class="status-{{ r.outcome }}">{{ r.outcome }}</td>
+        <td class="ts">{% if r.duration is not none %}{{ "%.1f"|format(r.duration) }}s{% else %}—{% endif %}</td>
+        <td>{% if r.log %}<details><summary>▸</summary><pre>{{ r.log }}</pre></details>{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="no-data">no data yet</p>{% endif %}
+</section>
+
+<section>
+  <h2>Recently sent articles</h2>
+  {% if articles %}
+  <table>
+    <thead><tr><th>Title</th><th>Source</th><th>Words</th><th>Sent</th></tr></thead>
+    <tbody>
+    {% for a in articles %}
+      <tr>
+        <td>{% if a.url %}<a href="{{ a.url }}">{{ a.title }}</a>{% else %}{{ a.title }}{% endif %}</td>
+        <td>{{ a.url|domain }}</td>
+        <td>{{ "{:,}".format(a.word_count) }}</td>
+        <td class="ts">{{ a.sent_at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<p class="no-data">no data yet</p>{% endif %}
+</section>
+
+<section class="settings">
+  <h2>Settings (rarely needed)</h2>
+  <form method="post" action="/word-budget" class="settings-form">
+    <label for="value">Daily word budget</label>
+    <input type="number" id="value" name="value" value="{{ word_budget }}" min="{{ wb_min }}" max="{{ wb_max }}" required>
+    <button type="submit">Save</button>
+    {% if budget_flash == "ok" %}
+      <span class="flash-inline flash-info">saved</span>
+    {% elif budget_flash == "invalid" %}
+      <span class="flash-inline flash-warn">invalid (must be {{ wb_min }}–{{ wb_max }})</span>
+    {% endif %}
+  </form>
+  <p class="hint">Soft cap; the digest stops after the article that pushes the total above this number.</p>
+</section>
+
+<script id="chart-data" type="application/json">{{ chart_data|tojson }}</script>
+<script>
+  const data = JSON.parse(document.getElementById('chart-data').textContent);
+  new Chart(document.getElementById('chart'), {
+    type: 'bar',
+    data: {
+      labels: data.map(d => d.day.slice(5)),
+      datasets: [{ data: data.map(d => d.n), backgroundColor: '#4a8' }]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => data[items[0].dataIndex].day,
+            label: (item) => {
+              const d = data[item.dataIndex];
+              return d.n + ' articles, ' + d.words.toLocaleString() + ' words';
+            }
+          }
+        }
+      },
+      scales: { y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
+    }
+  });
+</script>
+
+</body>
+</html>

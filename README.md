@@ -1,114 +1,169 @@
 # inkbook-digest
 
-Daily "morning paper" pipeline. Pulls Readwise Reader articles tagged `toepub`, builds a single EPUB, emails it to an Inkbook reader at 06:30 Europe/Paris.
+A "morning paper" pipeline for Readwise Reader → Inkbook. Articles tagged `toepub` form a queue. Each daily run randomly picks from the queue until a soft word-budget is exceeded, ships the result as an EPUB by email at 06:30 Europe/Paris, and tags the sent articles in Reader. A status dashboard at `http://<pi>:8080/` shows queue stats, history, runs, and a 30-day chart, with a Trigger button for on-demand runs and a Pause toggle that blocks scheduled runs.
 
-See [SPEC.md](SPEC.md) for the full design.
+See [SPEC.md](SPEC.md) and [SPEC_V2.md](SPEC_V2.md) for the full design.
 
-## What it does, briefly
+## What it does
 
-- Lists `category=article AND tag=toepub` from Readwise Reader (server-side filter).
-- Drops anything already recorded in `data/digest.sqlite`.
-- Skips articles that Reader hasn't finished parsing yet (no html content).
-- Builds one EPUB: cover + TOC + chapters with embedded inline images. CSS is serif, justified, 1.5 line-height.
-- SMTPs the EPUB to the Inkbook ingestion address.
-- PATCHes Reader to add `sent-to-inkbook` to each successfully sent article.
-- On failure, mails the captured log buffer to `ALERT_EMAIL`.
+1. Fetch all `toepub`-tagged `category=article` documents from Reader.
+2. Drop anything in `sent_articles` (SQLite) — Reader stays SOT, no local queue table.
+3. Skip articles Reader hasn't finished parsing yet (no html content).
+4. Shuffle randomly, then accumulate word counts. Add the article that pushes total past `WORD_BUDGET`, then stop (stop-when-exceeded).
+5. Build a single EPUB: cover + TOC + chapters with embedded inline images. CSS is serif, 1.5 line-height, justified.
+6. SMTP the EPUB to `INKBOOK_EMAIL`.
+7. PATCH Reader to add `sent-to-inkbook` to each sent article.
+8. Persist digest + per-article rows in SQLite.
+9. On failure, mail the captured log buffer to `ALERT_EMAIL`.
 
-Idempotent: re-running with the same tagged articles will skip and exit empty.
+If the queue is empty, log empty run, no email.
+
+Same-day re-runs produce versioned volumes: `morning-paper-YYYY-MM-DD.epub` (Vol 1), then `-vol-2.epub`, etc., so the Inkbook doesn't overwrite. Empty/failed runs do not bump the volume.
 
 ## Reader API behaviour (verified)
 
-Both unverified assumptions in SPEC.md were tested with a live token before the implementation went in:
-
-- **`GET /api/v3/list/?tag=toepub` filters server-side.** Confirmed.
-- **`PATCH /api/v3/update/{id}/`** accepts tag mutations with body shape `{"tags": ["name1", "name2", ...]}`. The dict-shape body that mirrors the response is rejected with 400. **PATCH replaces the tag list wholesale**, so to add a tag we send `existing_names + [new_tag]`.
+- `GET /api/v3/list/?tag=toepub` **filters server-side** (confirmed live).
+- `PATCH /api/v3/update/{id}/` accepts `{"tags": ["name1", ...]}`. The dict-shape body is rejected with 400. **PATCH replaces the tag list wholesale**, so we send `existing_names + [new_tag]`.
 
 ## Run modes
 
-```
-python -m digest.main             # scheduler, daily at DIGEST_HOUR:DIGEST_MINUTE
-python -m digest.main --once      # run a single digest immediately and exit
-python -m digest.main --dry-run   # build EPUB, skip SMTP, skip Reader tag-add, skip SQLite recording
-```
-
-`--dry-run` only requires `READER_TOKEN`. The other env vars can be empty. Use it to iterate on EPUB rendering without sending mail.
-
-## Local development
-
-```
-uv sync
-export READER_TOKEN=...
-export DATA_DIR=./data
-uv run python -m digest.main --dry-run
+```bash
+uvicorn digest.main:app --host 0.0.0.0 --port 8080  # server: scheduler + dashboard
+python -m digest.main --once                         # CLI: one digest now, exit
+python -m digest.main --dry-run                      # CLI: build EPUB only, no SMTP / tag / DB write
+python -m digest.main --once --manual                # CLI: bypass paused setting
 ```
 
-The EPUB is written to `$DATA_DIR/morning-paper-YYYY-MM-DD.epub`. Open it in Calibre or another EPUB reader to verify rendering before pointing it at SMTP.
+In **server mode** (the container default) FastAPI runs the dashboard, plus an APScheduler `BackgroundScheduler` that fires the daily run at `DIGEST_HOUR:DIGEST_MINUTE`. Same `is_running` `threading.Lock` gates scheduled and triggered runs to prevent overlap.
+
+In **CLI mode**, `--dry-run` only requires `READER_TOKEN`.
+
+## Configuration (env vars)
+
+```
+READER_TOKEN=                       # https://readwise.io/access_token
+READER_TAG_TRIGGER=toepub
+READER_TAG_DONE=sent-to-inkbook
+
+SMTP_HOST=smtp.protonmail.ch
+SMTP_PORT=587
+SMTP_USER=                          # Proton SMTP username
+SMTP_PASSWORD=                      # Proton SMTP token (one-time view)
+SMTP_FROM=digest@vinceth.net
+
+INKBOOK_EMAIL=                      # Inkbook ingestion address
+ALERT_EMAIL=                        # error notifications
+
+DIGEST_HOUR=6
+DIGEST_MINUTE=30
+TZ=Europe/Paris
+
+WORD_BUDGET=5000                    # initial soft-cap; settings table is SOT after first startup
+IMAGE_SOFT_CAP_MB=10                # per-article warning threshold; still send
+DATA_DIR=/data
+LOG_LEVEL=INFO
+```
+
+**Word budget precedence**: `WORD_BUDGET` seeds the `settings` table on first startup. After that, the dashboard input edits `settings.word_budget` directly and the env var is ignored. Edit via `http://<pi>:8080/` → Settings → Daily word budget. Valid range: 500 – 50,000.
+
+## Dashboard
+
+Tailscale-only, no auth. After `docker compose up -d`, browse to `http://<pi>:8080/`.
+
+```
+┌─────────────────────────────────────────────────┐
+│  Morning Paper             [Pause]  [Trigger]   │
+├─────────────────────────────────────────────────┤
+│  Status                                         │
+│   Last digest    2026-04-29 06:30  Vol 1  5,400w│
+│   Next run       2026-04-30 06:30:00            │
+│   Queue          12 articles, ~38,500 words     │
+│   Total sent     127 articles, 312,000 words…   │
+├─────────────────────────────────────────────────┤
+│  Articles per day, last 30 days  [bar chart]    │
+├─────────────────────────────────────────────────┤
+│  Recent digests   (last 30, table)              │
+│  Recent runs      (last 30, expandable logs)    │
+│  Recently sent articles  (last 30, table)       │
+├─────────────────────────────────────────────────┤
+│  Settings (rarely needed)                       │
+│   Daily word budget  [ 5000 ]  [Save]           │
+│   Soft cap; the digest stops after the article  │
+│   that pushes the total above this number.      │
+└─────────────────────────────────────────────────┘
+```
+
+**Trigger** posts to `/trigger`, fires a digest run via `BackgroundTasks`. If a run is already in progress, the redirect carries `?triggered=already_running` and a flash banner appears.
+
+**Pause** toggles `settings.paused`. While paused, the scheduled run logs "paused — skipping" and exits without sending mail. The Trigger button still works (manual override). The button label flips to `Resume` and the "Next run" line shows muted `paused`.
+
+**Queue** is computed live from Reader on each `GET /` (60 s in-memory TTL). On Reader API failure, renders `unavailable` in muted red without 500-ing the page.
+
+**Logs**: each row in the runs table has a `▸` toggle that expands the captured log buffer (capped at 20 KB; `/runs/{id}/log` exposes the full text as plain text).
+
+**Health**: `GET /healthz` → `{"ok": true}`. Doesn't touch SQLite or Reader, stays green even when those don't.
 
 ## Deployment (Raspberry Pi)
 
-1. Create a Proton SMTP token paired with `digest@vinceth.net` (Settings → IMAP/SMTP → SMTP tokens). Save the token immediately — it's shown once.
-2. Get a Reader access token from <https://readwise.io/access_token>.
+1. Create a Proton SMTP token paired with `digest@vinceth.net` (Settings → IMAP/SMTP → SMTP tokens). Save it immediately.
+2. Get a Reader token from <https://readwise.io/access_token>.
 3. Confirm the Inkbook ingestion email address.
-4. Clone the repo to the Pi, copy `.env.example` to `.env`, fill in:
-   ```
-   READER_TOKEN=...
-   SMTP_USER=...           # your Proton SMTP username
-   SMTP_PASSWORD=...       # the Proton SMTP token
-   SMTP_FROM=digest@vinceth.net
-   INKBOOK_EMAIL=...       # Inkbook ingestion address
-   ALERT_EMAIL=...         # where errors go
-   ```
-5. `docker compose up -d --build`.
-6. `docker logs -f inkbook-digest` — should show `scheduler started, next run: ...`.
+4. Clone the repo, `cp .env.example .env`, fill in all values.
+5. `docker compose up -d --build`
+6. `docker logs -f inkbook-digest` → expect `scheduler started, next run: ...`.
+7. Browse `http://<pi-host>:8080/` (over Tailscale) — dashboard should load.
 
 ## Dry test
 
-Tag one article in Reader as `toepub`, then on the Pi:
+Tag a fresh article in Reader as `toepub`, then either:
 
-```
-docker exec inkbook-digest python -m digest.main --once
-```
+- Click **Trigger** on the dashboard, or
+- `docker exec inkbook-digest python -m digest.main --once`
 
-Confirm:
+Verify:
 
-- Email arrives at the Inkbook
-- EPUB renders on device with serif font, justified text, working TOC
-- Embedded images display
-- Cover page renders
+- Email arrives at the Inkbook with the correct EPUB
+- EPUB renders on device (serif, justified, working TOC, embedded images)
 - `sent-to-inkbook` tag appears on the article in Reader
+- The article shows up in the dashboard's recent-articles table
 
-Then tag a second article and re-run: the first should be skipped (idempotency), only the second sent. Re-run a third time with no new tags: `empty run — no email`, exit 0.
+For multi-article testing: tag 6+ articles totaling >5000 words; expect 3–5 selected (random shuffle + stop-when-exceeded). Re-run: only the unsent ones are eligible.
 
-If the dry test fails, run `--dry-run` mode and inspect the EPUB locally:
+To inspect SQLite directly inside the container:
 
-```
-docker exec inkbook-digest python -m digest.main --dry-run
-docker cp inkbook-digest:/data/morning-paper-$(date +%F).epub ./
+```bash
+docker exec inkbook-digest sqlite3 /data/digest.sqlite \
+  "SELECT sent_at, title, url, word_count FROM sent_articles ORDER BY sent_at DESC LIMIT 10;"
 ```
 
 ## Error handling
 
-| Condition | Inkbook email | Alert email | Exit |
+| Condition | Inkbook email | Alert email | Run outcome |
 |---|---|---|---|
-| No tagged articles | no | no | 0 |
-| All articles sent | yes | no | 0 |
-| Partial failure (digest sent, some `sent-to-inkbook` tag-adds failed) | yes | yes | 0 |
-| Total failure (no digest sent) | no | yes (if SMTP works) | 1 |
+| Empty queue | no | no | `empty` |
+| Paused (scheduled) | no | no | `paused` |
+| Paused + manual trigger | yes (if articles eligible) | no | `ok` |
+| All sends ok | yes | no | `ok` |
+| Partial failure (digest sent, some tag PATCHes failed) | yes | yes | `error` |
+| Total failure (no digest sent) | no | yes (if SMTP up) | `error` |
 
 If Proton SMTP itself is broken, neither email reaches you. Fall back to `docker logs inkbook-digest`.
 
 ## Schema changes during dev
 
-No migrations. Delete `data/digest.sqlite` and let `CREATE TABLE IF NOT EXISTS` rebuild it on next startup.
+Schema is idempotent: `CREATE TABLE IF NOT EXISTS` + additive `ALTER TABLE` with "duplicate column" tolerated. To start clean: `rm data/digest.sqlite` and let startup rebuild it.
 
 ## Layout
 
 ```
 src/digest/
-  config.py    # env loading + validation (fails fast on missing vars)
-  store.py     # SQLite schema + helpers
-  reader.py    # Readwise Reader client (list + tag-add)
-  epub.py      # cover, chapters, image embedding
-  mailer.py    # SMTP send + alert send
-  main.py      # scheduler, --once / --dry-run, end-to-end run
+  config.py            # env loading + validation, fails fast on missing vars
+  store.py             # SQLite schema, WAL, settings, volume + word_count helpers
+  reader.py            # Readwise Reader client (list_queue, add_tag, word_count)
+  epub.py              # cover, chapters, image embedding (volume-aware)
+  mailer.py            # SMTP send + alert send
+  main.py              # FastAPI app, lifespan-managed scheduler, run logic, CLI entry
+  dashboard.py         # FastAPI routes (/, /trigger, /pause, /word-budget, /runs/{id}/log)
+  templates/index.html # Single-page dashboard (Jinja)
+  static/style.css     # Dashboard styles
 ```

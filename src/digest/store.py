@@ -1,13 +1,19 @@
+import logging
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS digests (
   id INTEGER PRIMARY KEY,
   sent_at TEXT NOT NULL,
   article_count INTEGER NOT NULL,
-  status TEXT NOT NULL
+  status TEXT NOT NULL,
+  volume INTEGER NOT NULL DEFAULT 1,
+  total_words INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS sent_articles (
@@ -15,7 +21,8 @@ CREATE TABLE IF NOT EXISTS sent_articles (
   digest_id INTEGER NOT NULL REFERENCES digests(id),
   title TEXT,
   url TEXT,
-  sent_at TEXT NOT NULL
+  sent_at TEXT NOT NULL,
+  word_count INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS runs (
@@ -25,17 +32,59 @@ CREATE TABLE IF NOT EXISTS runs (
   outcome TEXT,
   log TEXT
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 """
+
+ADDITIVE_ALTERS = (
+    "ALTER TABLE digests ADD COLUMN volume INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE digests ADD COLUMN total_words INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sent_articles ADD COLUMN word_count INTEGER NOT NULL DEFAULT 0",
+)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _apply_additive_alters(conn: sqlite3.Connection) -> None:
+    for stmt in ADDITIVE_ALTERS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" in str(e).lower():
+                continue
+            log.warning(f"ALTER failed (continuing): {stmt!r}: {e}")
+
+
+def _seed_settings(conn: sqlite3.Connection) -> None:
+    initial_word_budget = os.environ.get("WORD_BUDGET", "5000")
+    rows = (
+        ("paused", "false"),
+        ("word_budget", initial_word_budget),
+    )
+    for k, v in rows:
+        conn.execute(
+            "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?)",
+            (k, v, _now()),
+        )
+
+
 def connect(data_dir: Path) -> sqlite3.Connection:
     data_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(data_dir / "digest.sqlite", isolation_level=None)
+    conn = sqlite3.connect(
+        data_dir / "digest.sqlite",
+        isolation_level=None,
+        check_same_thread=False,
+    )
+    conn.execute("PRAGMA journal_mode=WAL;")
     conn.executescript(SCHEMA)
+    _apply_additive_alters(conn)
+    _seed_settings(conn)
     return conn
 
 
@@ -48,17 +97,24 @@ def record_run_start(conn: sqlite3.Connection) -> int:
     return cur.lastrowid
 
 
-def record_run_end(conn: sqlite3.Connection, run_id: int, outcome: str, log: str) -> None:
+def record_run_end(conn: sqlite3.Connection, run_id: int, outcome: str, log_text: str) -> None:
     conn.execute(
         "UPDATE runs SET finished_at = ?, outcome = ?, log = ? WHERE id = ?",
-        (_now(), outcome, log, run_id),
+        (_now(), outcome, log_text, run_id),
     )
 
 
-def record_digest(conn: sqlite3.Connection, article_count: int, status: str) -> int:
+def record_digest(
+    conn: sqlite3.Connection,
+    article_count: int,
+    status: str,
+    volume: int = 1,
+    total_words: int = 0,
+) -> int:
     cur = conn.execute(
-        "INSERT INTO digests (sent_at, article_count, status) VALUES (?, ?, ?)",
-        (_now(), article_count, status),
+        "INSERT INTO digests (sent_at, article_count, status, volume, total_words) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (_now(), article_count, status, volume, total_words),
     )
     return cur.lastrowid
 
@@ -69,11 +125,13 @@ def record_sent_article(
     reader_document_id: str,
     title: str | None,
     url: str | None,
+    word_count: int,
 ) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO sent_articles "
-        "(reader_document_id, digest_id, title, url, sent_at) VALUES (?, ?, ?, ?, ?)",
-        (reader_document_id, digest_id, title, url, _now()),
+        "(reader_document_id, digest_id, title, url, sent_at, word_count) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (reader_document_id, digest_id, title, url, _now(), word_count),
     )
 
 
@@ -82,3 +140,40 @@ def prune_old_runs(conn: sqlite3.Connection, days: int = 30) -> None:
         "DELETE FROM runs WHERE started_at < datetime('now', ?)",
         (f"-{days} days",),
     )
+
+
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        (key, value, _now()),
+    )
+
+
+def get_word_budget(conn: sqlite3.Connection) -> int:
+    raw = get_setting(conn, "word_budget")
+    if raw is not None:
+        try:
+            return int(raw)
+        except ValueError:
+            log.warning(f"settings.word_budget is unparseable: {raw!r}; falling back to env")
+    env_raw = os.environ.get("WORD_BUDGET", "5000")
+    try:
+        return int(env_raw)
+    except ValueError:
+        log.warning(f"WORD_BUDGET env var is unparseable: {env_raw!r}; defaulting to 5000")
+        return 5000
+
+
+def get_today_volume_number(conn: sqlite3.Connection) -> int:
+    """Volume = count of today's status='sent' digests + 1."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM digests "
+        "WHERE DATE(sent_at) = DATE('now') AND status = 'sent'"
+    ).fetchone()
+    return (row[0] or 0) + 1

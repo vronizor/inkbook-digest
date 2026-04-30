@@ -39,7 +39,7 @@ def _safe_text(value) -> str:
     return str(value) if value else ""
 
 
-def make_cover(today: date, article_count: int) -> bytes:
+def make_cover(today: date, article_count: int, volume: int = 1) -> bytes:
     img = Image.new("RGB", (600, 900), "white")
     draw = ImageDraw.Draw(img)
     try:
@@ -49,7 +49,8 @@ def make_cover(today: date, article_count: int) -> bytes:
         title_font = ImageFont.load_default()
         meta_font = ImageFont.load_default()
     draw.text((50, 220), "Morning Paper", fill="black", font=title_font)
-    draw.text((50, 320), today.isoformat(), fill="black", font=meta_font)
+    date_label = today.isoformat() if volume == 1 else f"{today.isoformat()} (Vol. {volume})"
+    draw.text((50, 320), date_label, fill="black", font=meta_font)
     draw.text(
         (50, 380),
         f"{article_count} article{'s' if article_count != 1 else ''}",
@@ -153,14 +154,17 @@ def build_epub(
     articles: list[dict],
     out_path,
     image_soft_cap_mb: int,
+    volume: int = 1,
 ) -> None:
     book = epub.EpubBook()
-    book.set_identifier(f"morning-paper-{today.isoformat()}")
-    book.set_title(f"Morning Paper {today.isoformat()}")
+    suffix = "" if volume == 1 else f"-vol-{volume}"
+    title_suffix = "" if volume == 1 else f" (Vol. {volume})"
+    book.set_identifier(f"morning-paper-{today.isoformat()}{suffix}")
+    book.set_title(f"Morning Paper {today.isoformat()}{title_suffix}")
     book.set_language("en")
     book.add_author("Readwise Reader Digest")
 
-    cover_bytes = make_cover(today, len(articles))
+    cover_bytes = make_cover(today, len(articles), volume=volume)
     book.set_cover("cover.png", cover_bytes)
 
     style = epub.EpubItem(

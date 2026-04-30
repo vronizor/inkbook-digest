@@ -1,75 +1,120 @@
 import argparse
 import io
 import logging
+import random
 import sys
+import threading
+from contextlib import asynccontextmanager
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from apscheduler.schedulers.blocking import BlockingScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from digest import config, epub, mailer, store
-from digest.reader import Reader, tag_names
+from digest.reader import Reader, tag_names, word_count as reader_word_count
+
+_PKG_DIR = Path(__file__).parent
+_LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 log = logging.getLogger("digest")
+is_running = threading.Lock()
 
 
-def _setup_logging(level: str) -> io.StringIO:
-    buf = io.StringIO()
+def _setup_global_logging(level: str) -> None:
     root = logging.getLogger()
     root.setLevel(level)
-    fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     for h in list(root.handlers):
         root.removeHandler(h)
     sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
+    sh.setFormatter(logging.Formatter(_LOG_FORMAT))
     root.addHandler(sh)
+
+
+def _attach_run_buffer() -> tuple[io.StringIO, logging.Handler]:
+    buf = io.StringIO()
     bh = logging.StreamHandler(buf)
-    bh.setFormatter(fmt)
-    root.addHandler(bh)
-    return buf
+    bh.setFormatter(logging.Formatter(_LOG_FORMAT))
+    logging.getLogger().addHandler(bh)
+    return buf, bh
 
 
-def run_once(cfg: config.Config, *, dry_run: bool = False) -> int:
-    log_buf = _setup_logging(cfg.log_level)
+def run_once(
+    cfg: config.Config, *, dry_run: bool = False, manual_trigger: bool = False
+) -> int:
+    log_buf, buf_handler = _attach_run_buffer()
     today = datetime.now(ZoneInfo(cfg.tz)).date()
-    mode = " (dry-run)" if dry_run else ""
+    mode_bits: list[str] = []
+    if dry_run:
+        mode_bits.append("dry-run")
+    if manual_trigger:
+        mode_bits.append("manual")
+    mode = f" ({', '.join(mode_bits)})" if mode_bits else ""
     log.info(f"=== digest run start: {today.isoformat()}{mode} ===")
 
     conn = store.connect(cfg.data_dir)
     store.prune_old_runs(conn)
     run_id = store.record_run_start(conn)
 
+    if not manual_trigger and store.get_setting(conn, "paused") == "true":
+        log.info("paused — skipping scheduled run (use manual trigger to override)")
+        store.record_run_end(conn, run_id, "paused", log_buf.getvalue())
+        return 0
+
     try:
         reader = Reader(cfg.reader_token)
         try:
             already = store.already_sent_ids(conn)
-            log.info(f"previously sent ids: {len(already)}")
+            queue = reader.list_queue(cfg.reader_tag_trigger)
+            log.info(f"reader queue: {len(queue)} articles, {len(already)} previously sent")
 
-            candidates = list(reader.list_tagged_articles(cfg.reader_tag_trigger))
-            log.info(f"reader returned {len(candidates)} tagged articles")
-
-            new = [a for a in candidates if a["id"] not in already]
+            new = [a for a in queue if a["id"] not in already]
             ready = [a for a in new if (a.get("html_content") or a.get("content"))]
-            unparsed = [a for a in new if a not in ready]
-            for a in unparsed:
-                log.info(f"skipping unparsed article (no html yet): {a.get('title')!r} ({a['id']})")
+            for a in new:
+                if a not in ready:
+                    log.info(f"skipping unparsed article (no html yet): {a.get('title')!r}")
+            log.info(f"eligible after parse-check: {len(ready)}")
 
-            log.info(f"new articles to send: {len(ready)} (skipped {len(unparsed)} unparsed)")
+            random.shuffle(ready)
+            budget = store.get_word_budget(conn)
+            log.info(f"word budget: {budget}")
 
-            if not ready:
+            selected: list[tuple[dict, int]] = []
+            total_words = 0
+            for a in ready:
+                wc = reader_word_count(a)
+                selected.append((a, wc))
+                total_words += wc
+                log.info(
+                    f"selected: {a.get('title')!r} ({wc} words, running total {total_words})"
+                )
+                if total_words >= budget:
+                    log.info(f"budget exceeded ({total_words} >= {budget}), stopping selection")
+                    break
+
+            if not selected:
                 store.record_digest(conn, 0, "empty")
                 store.record_run_end(conn, run_id, "empty", log_buf.getvalue())
                 log.info("empty run — no email")
                 return 0
 
-            out_path = cfg.data_dir / f"morning-paper-{today.isoformat()}.epub"
-            epub.build_epub(today, ready, out_path, cfg.image_soft_cap_mb)
-            log.info(f"epub built: {out_path} ({out_path.stat().st_size} bytes)")
+            volume = store.get_today_volume_number(conn)
+            vol_filename_suffix = "" if volume == 1 else f"-vol-{volume}"
+            vol_title_suffix = "" if volume == 1 else f" (Vol. {volume})"
+            articles_only = [a for a, _ in selected]
+            out_path = cfg.data_dir / f"morning-paper-{today.isoformat()}{vol_filename_suffix}.epub"
+            epub.build_epub(today, articles_only, out_path, cfg.image_soft_cap_mb, volume=volume)
+            log.info(
+                f"epub built: {out_path} ({out_path.stat().st_size} bytes, "
+                f"vol {volume}, {total_words} words)"
+            )
 
             if dry_run:
                 store.record_run_end(conn, run_id, "ok", log_buf.getvalue())
-                log.info(f"=== dry-run done: {len(ready)} articles, epub at {out_path} ===")
+                log.info(f"=== dry-run done: {len(selected)} articles, epub at {out_path} ===")
                 log.info("dry-run: skipped SMTP send, Reader tag-add, and sent_articles recording")
                 return 0
 
@@ -77,16 +122,19 @@ def run_once(cfg: config.Config, *, dry_run: bool = False) -> int:
                 host=cfg.smtp_host, port=cfg.smtp_port,
                 user=cfg.smtp_user, password=cfg.smtp_password,
                 sender=cfg.smtp_from, recipient=cfg.inkbook_email,
-                subject=f"Morning Paper {today.isoformat()}",
+                subject=f"Morning Paper {today.isoformat()}{vol_title_suffix}",
                 epub_path=out_path,
             )
 
-            digest_id = store.record_digest(conn, len(ready), "sent")
+            digest_id = store.record_digest(
+                conn, len(selected), "sent", volume=volume, total_words=total_words
+            )
             tag_errors: list[str] = []
-            for a in ready:
+            for a, wc in selected:
                 store.record_sent_article(
                     conn, digest_id, a["id"],
                     a.get("title"), a.get("source_url") or a.get("url"),
+                    word_count=wc,
                 )
                 try:
                     reader.add_tag(a["id"], tag_names(a), cfg.reader_tag_done)
@@ -100,7 +148,7 @@ def run_once(cfg: config.Config, *, dry_run: bool = False) -> int:
             if tag_errors:
                 _try_send_alert(cfg, today, log_buf.getvalue(),
                                 f"[inkbook-digest] partial failure on {today.isoformat()}")
-            log.info(f"=== digest run done: {len(ready)} sent ===")
+            log.info(f"=== digest run done: {len(selected)} sent, {total_words} words, vol {volume} ===")
             return 0
         finally:
             reader.close()
@@ -112,6 +160,23 @@ def run_once(cfg: config.Config, *, dry_run: bool = False) -> int:
             _try_send_alert(cfg, today, log_buf.getvalue(),
                             f"[inkbook-digest] failure on {today.isoformat()}")
         return 1
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        logging.getLogger().removeHandler(buf_handler)
+
+
+def run_with_lock(cfg: config.Config, *, manual_trigger: bool = False) -> None:
+    """Wrapper for scheduler/trigger paths. Skips if another run is in progress."""
+    if not is_running.acquire(blocking=False):
+        log.warning("run skipped: another digest run is already in progress")
+        return
+    try:
+        run_once(cfg, manual_trigger=manual_trigger)
+    finally:
+        is_running.release()
 
 
 def _try_send_alert(cfg: config.Config, today: date, body: str, subject: str) -> None:
@@ -126,6 +191,42 @@ def _try_send_alert(cfg: config.Config, today: date, body: str, subject: str) ->
         log.error(f"alert email failed too: {e}")
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cfg = config.load(require_smtp=True)
+    _setup_global_logging(cfg.log_level)
+    scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
+    scheduler.add_job(
+        lambda: run_with_lock(cfg),
+        CronTrigger(hour=cfg.digest_hour, minute=cfg.digest_minute),
+        id="daily-digest",
+    )
+    scheduler.start()
+    next_run = scheduler.get_job("daily-digest").next_run_time
+    log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    app.state.cfg = cfg
+    app.state.scheduler = scheduler
+    app.state.is_running = is_running
+    app.state.run_with_lock = run_with_lock
+    yield
+    scheduler.shutdown(wait=False)
+    log.info("scheduler stopped")
+
+
+app = FastAPI(lifespan=lifespan, title="inkbook-digest")
+app.mount("/static", StaticFiles(directory=str(_PKG_DIR / "static")), name="static")
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, bool]:
+    return {"ok": True}
+
+
+from digest.dashboard import router as _dashboard_router  # noqa: E402
+
+app.include_router(_dashboard_router)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="digest")
     parser.add_argument("--once", action="store_true", help="run a single digest and exit")
@@ -134,24 +235,25 @@ def main() -> int:
         action="store_true",
         help="build EPUB but skip SMTP send, Reader tag-add, and sent_articles recording",
     )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        help="manual trigger: bypass the paused setting (mirrors the dashboard's Trigger button)",
+    )
     args = parser.parse_args()
 
     cfg = config.load(require_smtp=not args.dry_run)
+    _setup_global_logging(cfg.log_level)
 
     if args.once or args.dry_run:
-        return run_once(cfg, dry_run=args.dry_run)
+        return run_once(cfg, dry_run=args.dry_run, manual_trigger=args.manual)
 
-    _setup_logging(cfg.log_level)
-    sched = BlockingScheduler(timezone=ZoneInfo(cfg.tz))
-    trigger = CronTrigger(hour=cfg.digest_hour, minute=cfg.digest_minute)
-    sched.add_job(lambda: run_once(cfg), trigger, id="daily-digest")
-    next_run = trigger.get_next_fire_time(None, datetime.now(ZoneInfo(cfg.tz)))
-    log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
-    try:
-        sched.start()
-    except (KeyboardInterrupt, SystemExit):
-        log.info("scheduler stopping")
-    return 0
+    print(
+        "Server mode: run via `uvicorn digest.main:app --host 0.0.0.0 --port 8080`.\n"
+        "CLI mode: pass --once or --dry-run.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":
