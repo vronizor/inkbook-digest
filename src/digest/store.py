@@ -1,6 +1,7 @@
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -168,6 +169,23 @@ def get_word_budget(conn: sqlite3.Connection) -> int:
     except ValueError:
         log.warning(f"WORD_BUDGET env var is unparseable: {env_raw!r}; defaulting to 5000")
         return 5000
+
+
+def build_epub_path(data_dir: Path, sent_at: str, volume: int) -> Path:
+    day = sent_at[:10]
+    suffix = "" if volume == 1 else f"-vol-{volume}"
+    return data_dir / "epubs" / f"morning-paper-{day}{suffix}.epub"
+
+
+def prune_old_epubs(data_dir: Path) -> int:
+    epub_dir = data_dir / "epubs"
+    if not epub_dir.exists():
+        return 0
+    cutoff = time.time() - 30 * 86400
+    stale = [f for f in epub_dir.glob("*.epub") if f.stat().st_mtime < cutoff]
+    for f in stale:
+        f.unlink()
+    return len(stale)
 
 
 def get_today_volume_number(conn: sqlite3.Connection) -> int:

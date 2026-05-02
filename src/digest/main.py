@@ -102,10 +102,10 @@ def run_once(
                 return 0
 
             volume = store.get_today_volume_number(conn)
-            vol_filename_suffix = "" if volume == 1 else f"-vol-{volume}"
             vol_title_suffix = "" if volume == 1 else f" (Vol. {volume})"
             articles_only = [a for a, _ in selected]
-            out_path = cfg.data_dir / f"morning-paper-{today.isoformat()}{vol_filename_suffix}.epub"
+            (cfg.data_dir / "epubs").mkdir(exist_ok=True)
+            out_path = store.build_epub_path(cfg.data_dir, today.isoformat(), volume)
             epub.build_epub(today, articles_only, out_path, cfg.image_soft_cap_mb, volume=volume)
             log.info(
                 f"epub built: {out_path} ({out_path.stat().st_size} bytes, "
@@ -204,6 +204,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     next_run = scheduler.get_job("daily-digest").next_run_time
     log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    pruned = store.prune_old_epubs(cfg.data_dir)
+    log.info(f"startup epub prune: {pruned} file(s) removed")
     app.state.cfg = cfg
     app.state.scheduler = scheduler
     app.state.is_running = is_running

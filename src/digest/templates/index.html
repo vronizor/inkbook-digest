@@ -80,7 +80,7 @@
         <td>{{ d.volume }}</td>
         <td>{{ d.article_count }}</td>
         <td>{{ "{:,}".format(d.total_words) }}</td>
-        <td class="status-{{ d.status }}">{{ d.status }}</td>
+        <td class="status-{{ d.status }}">{{ d.status }}{% if d.status == 'sent' %} <a href="/digests/{{ d.id }}/epub" style="font-size:.85em;margin-left:.5em;color:var(--muted)">↓ epub</a>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>

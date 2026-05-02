@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Form, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from digest import store
@@ -113,11 +113,11 @@ def dashboard(request: Request):
 
         digests = [
             {
-                "sent_at": r[0], "volume": r[1], "article_count": r[2],
-                "total_words": r[3], "status": r[4],
+                "id": r[0], "sent_at": r[1], "volume": r[2], "article_count": r[3],
+                "total_words": r[4], "status": r[5],
             }
             for r in conn.execute(
-                "SELECT sent_at, volume, article_count, total_words, status FROM digests "
+                "SELECT id, sent_at, volume, article_count, total_words, status FROM digests "
                 "ORDER BY sent_at DESC LIMIT ?", (TABLE_LIMIT,),
             )
         ]
@@ -170,6 +170,24 @@ def dashboard(request: Request):
             "is_running": is_running.locked(),
         },
     )
+
+
+@router.get("/digests/{digest_id}/epub")
+def download_epub(digest_id: int, request: Request):
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        row = conn.execute(
+            "SELECT sent_at, volume FROM digests WHERE id = ?", (digest_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return PlainTextResponse("not found", status_code=404)
+    path = store.build_epub_path(cfg.data_dir, row[0], row[1])
+    if not path.exists():
+        return PlainTextResponse("EPUB no longer available", status_code=404)
+    return FileResponse(path, filename=path.name)
 
 
 @router.get("/runs/{run_id}/log", response_class=PlainTextResponse)
