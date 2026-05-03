@@ -2,13 +2,13 @@ import logging
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
-from fastapi import APIRouter, BackgroundTasks, Form, Request
+from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import store
+from digest import library, store
 from digest.reader import Reader, word_count as reader_word_count
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,37 @@ def _domain(url):
         return ""
 
 
+def _human_size(b):
+    if b is None:
+        return ""
+    b = float(b)
+    for unit in ("B", "KB", "MB", "GB"):
+        if b < 1024 or unit == "GB":
+            return f"{b:.0f} {unit}" if unit == "B" else f"{b:.1f} {unit}"
+        b /= 1024
+
+
 templates.env.filters["domain"] = _domain
+templates.env.filters["human_size"] = _human_size
+
+
+def _opds_url(cfg, request: Request) -> str:
+    base = cfg.base_url or str(request.base_url).rstrip("/")
+    return f"{base}/opds/"
+
+
+def _upload_flashes(request: Request) -> list[dict]:
+    kinds = request.query_params.getlist("library_upload")
+    names = request.query_params.getlist("name")
+    reasons = request.query_params.getlist("reason")
+    out = []
+    for i, kind in enumerate(kinds):
+        out.append({
+            "kind": kind,
+            "name": names[i] if i < len(names) else "",
+            "reason": reasons[i] if i < len(reasons) else "",
+        })
+    return out
 
 
 def _truncate_log(s: str | None) -> str:
@@ -149,6 +179,7 @@ def dashboard(request: Request):
         word_budget = store.get_word_budget(conn)
         queue_stats, queue_error = _get_queue_stats(cfg, conn)
         chart = _chart_data(conn)
+        books = library.list_books(conn)
     finally:
         conn.close()
 
@@ -157,6 +188,13 @@ def dashboard(request: Request):
         job = scheduler.get_job("daily-digest")
         if job and job.next_run_time:
             next_run = job.next_run_time.isoformat()
+
+    upload_flashes = _upload_flashes(request)
+    delete_flash = (
+        request.query_params.get("name", "")
+        if request.query_params.get("library_delete") == "ok"
+        else None
+    )
 
     return templates.TemplateResponse(
         request, "index.html", {
@@ -168,6 +206,10 @@ def dashboard(request: Request):
             "triggered": request.query_params.get("triggered"),
             "budget_flash": request.query_params.get("budget"),
             "is_running": is_running.locked(),
+            "books": books,
+            "opds_url": _opds_url(cfg, request),
+            "upload_flashes": upload_flashes,
+            "delete_flash": delete_flash,
         },
     )
 
@@ -244,3 +286,61 @@ def word_budget(request: Request, value: str = Form(...)) -> RedirectResponse:
     finally:
         conn.close()
     return RedirectResponse(url="/?budget=ok", status_code=303)
+
+
+def _upload_size(upload: UploadFile) -> int:
+    if upload.size is not None:
+        return upload.size
+    upload.file.seek(0, 2)
+    n = upload.file.tell()
+    upload.file.seek(0)
+    return n
+
+
+@router.post("/library/upload")
+async def library_upload(
+    request: Request, files: list[UploadFile] = File(...)
+) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    pairs: list[tuple[str, str]] = []
+    try:
+        for f in files:
+            name = Path(f.filename or "").name
+            if not name:
+                pairs += [("library_upload", "invalid"), ("name", ""), ("reason", "missing filename")]
+                continue
+            size = _upload_size(f)
+            ok, reason = library.validate_upload(conn, name, size, cfg.library_max_upload_mb)
+            if not ok:
+                kind = "conflict" if "exists" in reason else "invalid"
+                pairs += [("library_upload", kind), ("name", name), ("reason", reason if kind == "invalid" else "")]
+                continue
+            try:
+                f.file.seek(0)
+                library.store_upload(conn, cfg.data_dir, f.file, name)
+                pairs += [("library_upload", "ok"), ("name", name), ("reason", "")]
+            except Exception as e:
+                log.exception(f"upload failed for {name}: {e}")
+                pairs += [("library_upload", "invalid"), ("name", name), ("reason", "store error")]
+    finally:
+        conn.close()
+    qs = "&".join(f"{k}={quote(v, safe='')}" for k, v in pairs)
+    return RedirectResponse(url=f"/?{qs}" if qs else "/", status_code=303)
+
+
+@router.post("/library/{book_id}/delete")
+def library_delete(book_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        row = conn.execute(
+            "SELECT filename FROM library_books WHERE id = ?", (book_id,)
+        ).fetchone()
+        name = row[0] if row else ""
+        library.delete_book(conn, cfg.data_dir, book_id)
+    finally:
+        conn.close()
+    return RedirectResponse(
+        url=f"/?library_delete=ok&name={quote(name, safe='')}", status_code=303
+    )

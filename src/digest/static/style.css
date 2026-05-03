@@ -77,3 +77,27 @@ a:hover { color: var(--accent); }
 .settings-form input[type="number"] { font: inherit; padding: 0.3em 0.5em; width: 7em; border: 1px solid var(--border); border-radius: 3px; }
 .settings-form label { color: var(--muted); }
 .hint { color: var(--muted); font-size: 0.9em; margin: 0.5em 0 0; }
+
+.opds-hint { color: var(--muted); font-size: 0.85em; margin: -0.5em 0 1em; }
+.opds-hint code { background: #eee; padding: 0.1em 0.4em; border-radius: 3px; font-size: 0.95em; }
+
+.library h2 { display: flex; align-items: center; justify-content: space-between; }
+.upload-form { display: flex; align-items: center; gap: 0.4em; text-transform: none; letter-spacing: 0; }
+.upload-form input[type="file"] { display: none; }
+.upload-form button { padding: 0.3em 0.9em; font-size: 0.85em; }
+
+.book-list { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--border); }
+.book { display: flex; align-items: center; gap: 0.8em; padding: 0.6em 0; border-bottom: 1px solid var(--border); }
+.book .cover { width: 60px; height: 90px; object-fit: cover; background: #eee; flex-shrink: 0; border: 1px solid var(--border); }
+.book-meta { flex-grow: 1; min-width: 0; }
+.book-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.book-sub { color: var(--muted); font-size: 0.85em; margin-top: 0.2em; }
+.book-delete { background: none; color: var(--muted); font-size: 1.4em; padding: 0 0.4em; line-height: 1; border-radius: 3px; }
+.book-delete:hover { background: #fbe; color: var(--error); }
+
+dialog { border: 1px solid var(--border); border-radius: 6px; padding: 1.2em 1.5em; max-width: 30em; }
+dialog::backdrop { background: rgba(0,0,0,0.3); }
+dialog p { margin: 0 0 1em; }
+.dialog-actions { display: flex; gap: 0.5em; justify-content: flex-end; }
+.dialog-actions button { background: #888; }
+.dialog-actions .btn-danger { background: var(--error); }

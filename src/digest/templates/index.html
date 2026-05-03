@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>inkbook-digest</title>
+  <title>E-books & Morning Paper</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
 <header>
-  <h1>Morning Paper</h1>
+  <h1>E-books &amp; Morning Paper</h1>
   <div class="actions">
     <form method="post" action="/pause" class="inline">
       <button type="submit" class="btn-pause">{% if paused %}Resume{% else %}Pause{% endif %}</button>
@@ -20,11 +20,64 @@
   </div>
 </header>
 
+<p class="opds-hint">OPDS feed: <code>{{ opds_url }}</code></p>
+
+<div id="flashes">
 {% if triggered == "ok" %}
   <div class="flash flash-info">Run started — check the runs table in a few seconds.</div>
 {% elif triggered == "already_running" %}
   <div class="flash flash-warn">A run is already in progress.</div>
 {% endif %}
+{% for f in upload_flashes %}
+  {% if f.kind == "ok" %}
+    <div class="flash flash-info">Uploaded: {{ f.name }}</div>
+  {% elif f.kind == "conflict" %}
+    <div class="flash flash-warn">{{ f.name }} already exists. Rename and try again.</div>
+  {% elif f.kind == "invalid" %}
+    <div class="flash flash-warn">{{ f.name }} rejected: {{ f.reason }}</div>
+  {% endif %}
+{% endfor %}
+{% if delete_flash %}
+  <div class="flash flash-info">Deleted: {{ delete_flash }}</div>
+{% endif %}
+</div>
+
+<section class="library">
+  <h2>
+    Library
+    <form method="post" action="/library/upload" enctype="multipart/form-data" class="upload-form">
+      <input type="file" name="files" multiple accept=".epub,.pdf" required onchange="this.form.submit()">
+      <button type="button" onclick="this.previousElementSibling.click()">Upload</button>
+    </form>
+  </h2>
+  {% if books %}
+  <ul class="book-list">
+    {% for b in books %}
+    <li class="book">
+      <img class="cover" src="/opds/cover/library/{{ b.id }}" alt="">
+      <div class="book-meta">
+        <div class="book-name">{{ b.filename }}</div>
+        <div class="book-sub">{{ b.author or 'Unknown' }} · {{ b.format|upper }} · {{ b.size_bytes|human_size }} · {{ b.added_at[:10] }}</div>
+      </div>
+      <button type="button" class="book-delete" title="Delete"
+              onclick="confirmDelete({{ b.id }}, {{ b.filename|tojson }})">×</button>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="no-data">no books yet</p>
+  {% endif %}
+</section>
+
+<dialog id="delete-dialog">
+  <p>Delete <strong id="delete-name"></strong>?</p>
+  <div class="dialog-actions">
+    <button type="button" onclick="document.getElementById('delete-dialog').close()">Cancel</button>
+    <form id="delete-form" method="post" style="display:inline">
+      <button type="submit" class="btn-danger">Delete</button>
+    </form>
+  </div>
+</dialog>
 
 <section class="summary">
   <h2>Status</h2>
@@ -167,6 +220,20 @@
       scales: { y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
     }
   });
+
+  function confirmDelete(id, name) {
+    document.getElementById('delete-name').textContent = name;
+    document.getElementById('delete-form').action = '/library/' + id + '/delete';
+    document.getElementById('delete-dialog').showModal();
+  }
+
+  setTimeout(() => {
+    document.querySelectorAll('#flashes .flash').forEach(el => {
+      el.style.transition = 'opacity .3s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 300);
+    });
+  }, 5000);
 </script>
 
 </body>

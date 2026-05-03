@@ -39,6 +39,18 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS library_books (
+  id INTEGER PRIMARY KEY,
+  filename TEXT NOT NULL UNIQUE,
+  title TEXT,
+  author TEXT,
+  language TEXT,
+  format TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  has_cover INTEGER NOT NULL DEFAULT 0,
+  added_at TEXT NOT NULL
+);
 """
 
 ADDITIVE_ALTERS = (

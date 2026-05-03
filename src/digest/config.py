@@ -9,7 +9,6 @@ REQUIRED_FOR_SEND = (
     "SMTP_USER",
     "SMTP_PASSWORD",
     "SMTP_FROM",
-    "INKBOOK_EMAIL",
     "ALERT_EMAIL",
 )
 
@@ -26,7 +25,6 @@ class Config:
     smtp_password: str
     smtp_from: str
 
-    inkbook_email: str
     alert_email: str
 
     digest_hour: int
@@ -38,6 +36,9 @@ class Config:
     log_level: str
 
     word_budget: int
+
+    library_max_upload_mb: int
+    base_url: str
 
 
 def load(*, require_smtp: bool = True) -> Config:
@@ -60,7 +61,6 @@ def load(*, require_smtp: bool = True) -> Config:
             smtp_user=os.environ.get("SMTP_USER", ""),
             smtp_password=os.environ.get("SMTP_PASSWORD", ""),
             smtp_from=os.environ.get("SMTP_FROM", ""),
-            inkbook_email=os.environ.get("INKBOOK_EMAIL", ""),
             alert_email=os.environ.get("ALERT_EMAIL", ""),
             digest_hour=int(os.environ.get("DIGEST_HOUR", "6")),
             digest_minute=int(os.environ.get("DIGEST_MINUTE", "30")),
@@ -69,6 +69,8 @@ def load(*, require_smtp: bool = True) -> Config:
             data_dir=Path(os.environ.get("DATA_DIR", "/data")),
             log_level=os.environ.get("LOG_LEVEL", "INFO"),
             word_budget=int(os.environ.get("WORD_BUDGET", "5000")),
+            library_max_upload_mb=int(os.environ.get("LIBRARY_MAX_UPLOAD_MB", "200")),
+            base_url=os.environ.get("BASE_URL", "").rstrip("/"),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)

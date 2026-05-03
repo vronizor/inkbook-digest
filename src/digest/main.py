@@ -42,6 +42,34 @@ def _attach_run_buffer() -> tuple[io.StringIO, logging.Handler]:
     return buf, bh
 
 
+def _ensure_placeholder(out_path: Path, label: str) -> None:
+    if out_path.exists():
+        return
+    from PIL import Image, ImageDraw, ImageFont
+    img = Image.new("RGB", (600, 900), "#f5f5f5")
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([(80, 150), (520, 750)], outline="#888", width=4, fill="white")
+    draw.line([(80, 220), (520, 220)], fill="#bbb", width=2)
+    draw.line([(80, 280), (520, 280)], fill="#bbb", width=2)
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", 96)
+    except OSError:
+        font = ImageFont.load_default()
+    bbox = draw.textbbox((0, 0), label, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((600 - tw) / 2, (900 - th) / 2 - 20), label, fill="#444", font=font)
+    img.save(out_path, format="PNG")
+    log.info(f"generated placeholder cover: {out_path}")
+
+
+def _scaffold(cfg: config.Config) -> None:
+    (cfg.data_dir / "library" / "files").mkdir(parents=True, exist_ok=True)
+    (cfg.data_dir / "library" / "covers").mkdir(parents=True, exist_ok=True)
+    static = _PKG_DIR / "static"
+    _ensure_placeholder(static / "placeholder-epub.png", "EPUB")
+    _ensure_placeholder(static / "placeholder-pdf.png", "PDF")
+
+
 def run_once(
     cfg: config.Config, *, dry_run: bool = False, manual_trigger: bool = False
 ) -> int:
@@ -102,7 +130,6 @@ def run_once(
                 return 0
 
             volume = store.get_today_volume_number(conn)
-            vol_title_suffix = "" if volume == 1 else f" (Vol. {volume})"
             articles_only = [a for a, _ in selected]
             (cfg.data_dir / "epubs").mkdir(exist_ok=True)
             out_path = store.build_epub_path(cfg.data_dir, today.isoformat(), volume)
@@ -115,16 +142,8 @@ def run_once(
             if dry_run:
                 store.record_run_end(conn, run_id, "ok", log_buf.getvalue())
                 log.info(f"=== dry-run done: {len(selected)} articles, epub at {out_path} ===")
-                log.info("dry-run: skipped SMTP send, Reader tag-add, and sent_articles recording")
+                log.info("dry-run: skipped Reader tag-add and sent_articles recording")
                 return 0
-
-            mailer.send_digest(
-                host=cfg.smtp_host, port=cfg.smtp_port,
-                user=cfg.smtp_user, password=cfg.smtp_password,
-                sender=cfg.smtp_from, recipient=cfg.inkbook_email,
-                subject=f"Morning Paper {today.isoformat()}{vol_title_suffix}",
-                epub_path=out_path,
-            )
 
             digest_id = store.record_digest(
                 conn, len(selected), "sent", volume=volume, total_words=total_words
@@ -148,7 +167,7 @@ def run_once(
             if tag_errors:
                 _try_send_alert(cfg, today, log_buf.getvalue(),
                                 f"[inkbook-digest] partial failure on {today.isoformat()}")
-            log.info(f"=== digest run done: {len(selected)} sent, {total_words} words, vol {volume} ===")
+            log.info(f"=== digest run done: {len(selected)} articles, {total_words} words, vol {volume} ===")
             return 0
         finally:
             reader.close()
@@ -195,6 +214,7 @@ def _try_send_alert(cfg: config.Config, today: date, body: str, subject: str) ->
 async def lifespan(app: FastAPI):
     cfg = config.load(require_smtp=True)
     _setup_global_logging(cfg.log_level)
+    _scaffold(cfg)
     scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
     scheduler.add_job(
         lambda: run_with_lock(cfg),
@@ -225,8 +245,10 @@ def healthz() -> dict[str, bool]:
 
 
 from digest.dashboard import router as _dashboard_router  # noqa: E402
+from digest.opds import router as _opds_router  # noqa: E402
 
 app.include_router(_dashboard_router)
+app.include_router(_opds_router)
 
 
 def main() -> int:

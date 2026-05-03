@@ -6,6 +6,7 @@ __pycache__/
 *.pyo
 *.egg-info/
 data/
+src/digest/static/placeholder-*.png
 .DS_Store
 uv.lock
 dist/
