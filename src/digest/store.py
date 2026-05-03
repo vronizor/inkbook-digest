@@ -200,6 +200,21 @@ def prune_old_epubs(data_dir: Path) -> int:
     return len(stale)
 
 
+def migrate_root_epubs(data_dir: Path) -> int:
+    """Move any morning-paper-*.epub from data_dir root into data_dir/epubs/."""
+    epub_dir = data_dir / "epubs"
+    epub_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for f in data_dir.glob("morning-paper-*.epub"):
+        target = epub_dir / f.name
+        if target.exists():
+            log.warning(f"migrate_root_epubs: target exists, leaving in place: {f}")
+            continue
+        f.rename(target)
+        moved += 1
+    return moved
+
+
 def get_today_volume_number(conn: sqlite3.Connection) -> int:
     """Volume = count of today's status='sent' digests + 1."""
     row = conn.execute(

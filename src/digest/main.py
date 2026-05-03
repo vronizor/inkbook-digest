@@ -63,6 +63,7 @@ def _ensure_placeholder(out_path: Path, label: str) -> None:
 
 
 def _scaffold(cfg: config.Config) -> None:
+    (cfg.data_dir / "epubs").mkdir(parents=True, exist_ok=True)
     (cfg.data_dir / "library" / "files").mkdir(parents=True, exist_ok=True)
     (cfg.data_dir / "library" / "covers").mkdir(parents=True, exist_ok=True)
     static = _PKG_DIR / "static"
@@ -224,6 +225,8 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     next_run = scheduler.get_job("daily-digest").next_run_time
     log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    moved = store.migrate_root_epubs(cfg.data_dir)
+    log.info(f"startup epub migration: {moved} file(s) moved to epubs/")
     pruned = store.prune_old_epubs(cfg.data_dir)
     log.info(f"startup epub prune: {pruned} file(s) removed")
     app.state.cfg = cfg
