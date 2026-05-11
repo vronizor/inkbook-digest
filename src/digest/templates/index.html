@@ -117,7 +117,7 @@
 </section>
 
 <section class="chart-section">
-  <h2>Articles per day, last 30 days</h2>
+  <h2>Words per day, last 30 days</h2>
   <canvas id="chart" height="120"></canvas>
 </section>
 
@@ -201,7 +201,7 @@
     type: 'bar',
     data: {
       labels: data.map(d => d.day.slice(5)),
-      datasets: [{ data: data.map(d => d.n), backgroundColor: '#4a8' }]
+      datasets: [{ data: data.map(d => d.words), backgroundColor: '#4a8' }]
     },
     options: {
       responsive: true,
@@ -212,12 +212,12 @@
             title: (items) => data[items[0].dataIndex].day,
             label: (item) => {
               const d = data[item.dataIndex];
-              return d.n + ' articles, ' + d.words.toLocaleString() + ' words';
+              return d.n + ' article' + (d.n !== 1 ? 's' : '');
             }
           }
         }
       },
-      scales: { y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }
+      scales: { y: { beginAtZero: true } }
     }
   });
 
