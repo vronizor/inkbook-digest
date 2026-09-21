@@ -240,8 +240,11 @@ async def lifespan(app: FastAPI):
     log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
     moved = store.migrate_root_epubs(cfg.data_dir)
     log.info(f"startup epub migration: {moved} file(s) moved to epubs/")
-    pruned = store.prune_old_epubs(cfg.data_dir)
-    log.info(f"startup epub prune: {pruned} file(s) removed")
+    if cfg.epub_retention_days > 0:
+        pruned = store.prune_old_epubs(cfg.data_dir, cfg.epub_retention_days)
+        log.info(f"startup epub prune (>{cfg.epub_retention_days}d): {pruned} file(s) removed")
+    else:
+        log.info("startup epub prune: disabled (EPUB_RETENTION_DAYS=0)")
     app.state.cfg = cfg
     app.state.scheduler = scheduler
     app.state.is_running = is_running

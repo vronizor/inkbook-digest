@@ -18,6 +18,8 @@ ACQ_TYPE = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 
 router = APIRouter(prefix="/opds")
 
+DIGEST_FEED_LIMIT = 60
+
 
 def _base(cfg, request: Request) -> str:
     return cfg.base_url or str(request.base_url).rstrip("/")
@@ -103,16 +105,17 @@ def digests_feed(request: Request) -> Response:
     try:
         rows = conn.execute(
             "SELECT id, sent_at, volume, article_count, total_words FROM digests "
-            "WHERE status = 'sent' AND sent_at >= datetime('now', '-30 days') "
-            "ORDER BY sent_at DESC"
+            "WHERE status = 'sent' ORDER BY sent_at DESC"
         ).fetchall()
     finally:
         conn.close()
+    # Feed is driven by what's on disk, so it stays consistent with any retention setting.
     digests_data = [
         {"id": r[0], "sent_at": r[1], "volume": r[2],
          "article_count": r[3], "total_words": r[4]}
         for r in rows
-    ]
+        if store.build_epub_path(cfg.data_dir, r[1], r[2]).exists()
+    ][:DIGEST_FEED_LIMIT]
     entries = [_digest_entry(d, base) for d in digests_data]
     body = templates.get_template("opds_acquisition.xml").render(
         feed_id="urn:inkbook-digest:catalog:digests",

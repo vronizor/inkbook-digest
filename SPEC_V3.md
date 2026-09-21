@@ -40,7 +40,7 @@ OPDS 1.2 (Atom-based). Two top-level catalogs.
 | Method | Path | Description |
 |---|---|---|
 | GET | `/opds/` | OPDS root, lists two child feeds |
-| GET | `/opds/digests/` | Acquisition feed of recent morning papers (last 30 days) |
+| GET | `/opds/digests/` | Acquisition feed of recent morning papers (most recent 60 on disk) |
 | GET | `/opds/library/` | Acquisition feed of all library books, recently-added first |
 | GET | `/opds/file/digest/{digest_id}` | Direct EPUB download for a digest |
 | GET | `/opds/file/library/{book_id}` | Direct download for a library book |
@@ -66,7 +66,7 @@ Standard OPDS 1.2 feed elements per entry:
 - `<link rel="http://opds-spec.org/image" type="image/jpeg" href="...">` (cover)
 - `<link rel="http://opds-spec.org/acquisition" type="application/epub+zip" href="...">` (download)
 
-The digests feed limits to last 30 days of `status='sent'` digests, sorted recent-first. The library feed shows all books, recently-added first.
+The digests feed lists the most recent 60 `status='sent'` digests whose EPUB still exists on disk, sorted recent-first. The library feed shows all books, recently-added first.
 
 ## Library
 

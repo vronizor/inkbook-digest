@@ -210,11 +210,11 @@ def build_epub_path(data_dir: Path, sent_at: str, volume: int) -> Path:
     return data_dir / "epubs" / f"morning-paper-{day}{suffix}.epub"
 
 
-def prune_old_epubs(data_dir: Path) -> int:
+def prune_old_epubs(data_dir: Path, retention_days: int) -> int:
     epub_dir = data_dir / "epubs"
-    if not epub_dir.exists():
+    if retention_days <= 0 or not epub_dir.exists():
         return 0
-    cutoff = time.time() - 30 * 86400
+    cutoff = time.time() - retention_days * 86400
     stale = [f for f in epub_dir.glob("*.epub") if f.stat().st_mtime < cutoff]
     for f in stale:
         f.unlink()

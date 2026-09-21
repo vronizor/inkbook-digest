@@ -26,7 +26,7 @@ See [SPEC.md](SPEC.md), [SPEC_V2.md](SPEC_V2.md), and [SPEC_V3.md](SPEC_V3.md) f
 
 If the queue is empty, log empty run, no alert. Same-day re-runs produce versioned volumes (`-vol-2.epub`, etc.).
 
-EPUBs are kept in `$DATA_DIR/epubs/` for 30 days, then pruned at startup.
+EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Set `EPUB_RETENTION_DAYS=N` to delete files older than N days at startup.
 
 ### Library
 
@@ -43,7 +43,7 @@ EPUBs are kept in `$DATA_DIR/epubs/` for 30 days, then pruned at startup.
 | Path | Returns |
 |---|---|
 | `/opds/` | Navigation feed listing the two catalogs |
-| `/opds/digests/` | Last 30 days of `status='sent'` digests |
+| `/opds/digests/` | Most recent 60 `status='sent'` digests whose EPUB is still on disk |
 | `/opds/library/` | All library books, recently-added first |
 | `/opds/file/digest/{id}` | EPUB download |
 | `/opds/file/library/{id}` | EPUB or PDF download |

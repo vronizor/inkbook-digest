@@ -40,6 +40,8 @@ class Config:
     library_max_upload_mb: int
     base_url: str
 
+    epub_retention_days: int
+
 
 def load(*, require_smtp: bool = True) -> Config:
     required = REQUIRED_ALWAYS + (REQUIRED_FOR_SEND if require_smtp else ())
@@ -71,6 +73,7 @@ def load(*, require_smtp: bool = True) -> Config:
             word_budget=int(os.environ.get("WORD_BUDGET", "5000")),
             library_max_upload_mb=int(os.environ.get("LIBRARY_MAX_UPLOAD_MB", "200")),
             base_url=os.environ.get("BASE_URL", "").rstrip("/"),
+            epub_retention_days=int(os.environ.get("EPUB_RETENTION_DAYS", "0")),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)
