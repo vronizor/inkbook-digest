@@ -1,5 +1,6 @@
 import logging
 import re
+import time
 from typing import Iterator
 
 import httpx
@@ -48,6 +49,19 @@ class Reader:
     def list_queue(self, tag: str) -> list[dict]:
         """All toepub-tagged articles, fully materialized (queue is small)."""
         return list(self.list_tagged_articles(tag))
+
+    def get_document(self, doc_id: str) -> dict | None:
+        r = self._client.get(
+            f"{BASE}/list/", params={"id": doc_id, "withHtmlContent": "true"}
+        )
+        if r.status_code == 429:
+            wait = int(r.headers.get("Retry-After", "60"))
+            log.info(f"rate limited, sleeping {wait}s")
+            time.sleep(wait)
+            return self.get_document(doc_id)
+        r.raise_for_status()
+        results = r.json().get("results", [])
+        return results[0] if results else None
 
     def add_tag(self, doc_id: str, current_tag_names: list[str], new_tag: str) -> None:
         """PATCH replaces the full tag list. Send existing names + new tag."""

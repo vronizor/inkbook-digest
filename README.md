@@ -26,7 +26,7 @@ See [SPEC.md](SPEC.md), [SPEC_V2.md](SPEC_V2.md), and [SPEC_V3.md](SPEC_V3.md) f
 
 If the queue is empty, log empty run, no alert. Same-day re-runs produce versioned volumes (`-vol-2.epub`, etc.).
 
-EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Set `EPUB_RETENTION_DAYS=N` to delete files older than N days at startup.
+EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Missing EPUBs for past digests can be rebuilt from Reader with `python -m digest.recover --since YYYY-MM-DD [--dry-run]` (articles must still exist in Reader). Set `EPUB_RETENTION_DAYS=N` to delete files older than N days at startup.
 
 ### Library
 
