@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from digest import library, store
+from digest import epub, library, store
 
 log = logging.getLogger(__name__)
 
@@ -19,6 +19,14 @@ ACQ_TYPE = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 router = APIRouter(prefix="/opds")
 
 DIGEST_FEED_LIMIT = 60
+STATUS_TITLE = "No digests available"
+
+_OUTCOME_HINTS = {
+    "paused": "Scheduled runs are paused. Unpause from the dashboard.",
+    "empty": "The last run found no new articles. Tag articles with '{trigger}' in Reader.",
+    "error": "The last run failed. Check its log on the dashboard or the alert email.",
+    "interval-skip": "The last run was skipped because the digest interval had not elapsed.",
+}
 
 
 def _base(cfg, request: Request) -> str:
@@ -97,6 +105,60 @@ def root(request: Request) -> Response:
     return Response(content=body, media_type=NAV_TYPE)
 
 
+def _status_lines(cfg, base: str) -> list[str]:
+    conn = store.connect(cfg.data_dir)
+    try:
+        last_sent = store.get_last_sent_date(conn)
+        last_run = conn.execute(
+            "SELECT started_at, outcome FROM runs ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        paused = store.get_setting(conn, "paused") == "true"
+    finally:
+        conn.close()
+    lines = [f"Last digest sent: {last_sent or 'never'}."]
+    if last_run:
+        started, outcome = last_run
+        lines.append(f"Last run: {started[:16].replace('T', ' ')} UTC, outcome '{outcome or 'running'}'.")
+        hint = _OUTCOME_HINTS.get(outcome or "")
+        if hint:
+            lines.append(hint.format(trigger=cfg.reader_tag_trigger))
+    else:
+        lines.append("No runs recorded in the last 30 days.")
+    if paused and not (last_run and last_run[1] == "paused"):
+        lines.append("Scheduled runs are currently paused.")
+    if last_sent:
+        lines.append("Digests were sent but their EPUB files are missing from disk.")
+    lines.append(f"Dashboard: {base}/")
+    return lines
+
+
+def _status_entry(base: str) -> dict:
+    now = _now_iso()
+    return {
+        "id": "urn:inkbook-digest:status",
+        "title": STATUS_TITLE,
+        "author": "inkbook-digest",
+        "updated": now,
+        "published": now,
+        "summary": "Open for the reason and the state of the last run.",
+        "language": "en",
+        "cover_url": f"{base}/opds/cover/digest/0",
+        "acquisition_url": f"{base}/opds/file/status",
+        "media_type": "application/epub+zip",
+    }
+
+
+@router.get("/file/status")
+def file_status(request: Request) -> Response:
+    cfg = request.app.state.cfg
+    data = epub.build_status_epub(STATUS_TITLE, _status_lines(cfg, _base(cfg, request)))
+    return Response(
+        content=data,
+        media_type="application/epub+zip",
+        headers={"Content-Disposition": 'attachment; filename="no-digests-available.epub"'},
+    )
+
+
 @router.get("/digests/")
 def digests_feed(request: Request) -> Response:
     cfg = request.app.state.cfg
@@ -116,7 +178,7 @@ def digests_feed(request: Request) -> Response:
         for r in rows
         if store.build_epub_path(cfg.data_dir, r[1], r[2]).exists()
     ][:DIGEST_FEED_LIMIT]
-    entries = [_digest_entry(d, base) for d in digests_data]
+    entries = [_digest_entry(d, base) for d in digests_data] or [_status_entry(base)]
     body = templates.get_template("opds_acquisition.xml").render(
         feed_id="urn:inkbook-digest:catalog:digests",
         feed_title="Morning Papers",

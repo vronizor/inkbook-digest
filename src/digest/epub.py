@@ -209,3 +209,27 @@ def build_epub(
     book.spine = ["nav", *chapters]
 
     epub.write_epub(str(out_path), book)
+
+
+def build_status_epub(title: str, lines: list[str]) -> bytes:
+    book = epub.EpubBook()
+    book.set_identifier("inkbook-digest-status")
+    book.set_title(title)
+    book.set_language("en")
+    book.add_author("inkbook-digest")
+    style = epub.EpubItem(
+        uid="style", file_name="style/style.css", media_type="text/css", content=CSS,
+    )
+    book.add_item(style)
+    body = "".join(f"<p>{_html_escape(line)}</p>" for line in lines)
+    page = epub.EpubHtml(uid="status", title=title, file_name="status.xhtml", lang="en")
+    page.content = f"<html><body><h1>{_html_escape(title)}</h1>{body}</body></html>"
+    page.add_item(style)
+    book.add_item(page)
+    book.toc = (page,)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = [page]
+    buf = io.BytesIO()
+    epub.write_epub(buf, book)
+    return buf.getvalue()

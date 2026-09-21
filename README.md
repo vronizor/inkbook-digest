@@ -43,7 +43,7 @@ EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Missing EPUBs for 
 | Path | Returns |
 |---|---|
 | `/opds/` | Navigation feed listing the two catalogs |
-| `/opds/digests/` | Most recent 60 `status='sent'` digests whose EPUB is still on disk |
+| `/opds/digests/` | Most recent 60 `status='sent'` digests whose EPUB is still on disk; if none, a single "No digests available" entry whose EPUB explains why |
 | `/opds/library/` | All library books, recently-added first |
 | `/opds/file/digest/{id}` | EPUB download |
 | `/opds/file/library/{id}` | EPUB or PDF download |
