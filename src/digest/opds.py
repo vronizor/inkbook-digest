@@ -95,6 +95,15 @@ def root(request: Request) -> Response:
             "href": f"{base}/opds/library/",
         },
     ]
+    entries += [
+        {
+            "id": f"urn:inkbook-digest:catalog:extra:{i}",
+            "title": title,
+            "summary": f"External catalog: {url}",
+            "href": url,
+        }
+        for i, (title, url) in enumerate(cfg.extra_catalogs)
+    ]
     body = templates.get_template("opds_navigation.xml").render(
         feed_id="urn:inkbook-digest:root",
         feed_title="E-books & Morning Paper",

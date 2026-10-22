@@ -102,6 +102,8 @@ BASE_URL=                           # optional; the publicly-reachable host, e.g
                                     # used in OPDS feeds for absolute URLs and the dashboard hint
 ```
 
+**`EXTRA_CATALOGS`** lists other OPDS catalogs in the root feed, next to Morning Papers and Library, so the e-reader needs only one catalog URL. Format: `Title|https://host/opds/`, several separated by `;`. The links are absolute, so the e-reader fetches them from those hosts directly.
+
 **SMTP is now alerts-only.** No `INKBOOK_EMAIL` — books are pulled by KOReader via OPDS, not pushed by email. SMTP creds remain so we can still mail you on digest failures.
 
 **`BASE_URL` matters for OPDS.** KOReader needs absolute URLs in feed entries. Set `BASE_URL` to the Tailscale hostname (or whatever the device hits) so links resolve cleanly across devices. If unset, the request host is used, which may not be reachable from the device that fetched the feed.

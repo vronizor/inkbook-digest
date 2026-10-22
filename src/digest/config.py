@@ -42,6 +42,18 @@ class Config:
 
     epub_retention_days: int
 
+    extra_catalogs: tuple[tuple[str, str], ...] = ()
+
+
+def _parse_catalogs(raw: str) -> tuple[tuple[str, str], ...]:
+    catalogs = []
+    for item in filter(None, (part.strip() for part in raw.split(";"))):
+        title, sep, url = item.partition("|")
+        if not sep or not title.strip() or not url.strip().startswith(("http://", "https://")):
+            raise ValueError(f"EXTRA_CATALOGS entry must be 'Title|https://…', got {item!r}")
+        catalogs.append((title.strip(), url.strip()))
+    return tuple(catalogs)
+
 
 def load(*, require_smtp: bool = True) -> Config:
     required = REQUIRED_ALWAYS + (REQUIRED_FOR_SEND if require_smtp else ())
@@ -74,6 +86,7 @@ def load(*, require_smtp: bool = True) -> Config:
             library_max_upload_mb=int(os.environ.get("LIBRARY_MAX_UPLOAD_MB", "200")),
             base_url=os.environ.get("BASE_URL", "").rstrip("/"),
             epub_retention_days=int(os.environ.get("EPUB_RETENTION_DAYS", "0")),
+            extra_catalogs=_parse_catalogs(os.environ.get("EXTRA_CATALOGS", "")),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)
