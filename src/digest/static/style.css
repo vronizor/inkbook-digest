@@ -18,6 +18,8 @@ body {
 }
 header {
   display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em 1em;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border);
@@ -25,6 +27,8 @@ header {
   margin-bottom: 1em;
 }
 h1 { margin: 0; font-size: 1.5em; }
+.brand { display: flex; align-items: center; gap: 0.6em; }
+.brand-mark { display: block; width: 48px; height: 48px; border-radius: 10px; }
 h2 { font-size: 1em; margin: 1.5em 0 0.5em; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
 .actions { display: flex; gap: 0.5em; }
 .actions form { display: inline; margin: 0; }

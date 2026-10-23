@@ -11,7 +11,10 @@
 <body>
 
 <header>
-  <h1>E-books &amp; Morning Paper</h1>
+  <div class="brand">
+    <img class="brand-mark" src="/static/logo.svg" alt="" width="48" height="48">
+    <h1>E-books &amp; Morning Paper</h1>
+  </div>
   <div class="actions">
     <form method="post" action="/pause" class="inline">
       <button type="submit" class="btn-pause">{% if paused %}Resume{% else %}Pause{% endif %}</button>
