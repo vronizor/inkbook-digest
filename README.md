@@ -1,4 +1,4 @@
-# inkbook-digest
+# Kiosk (inkbook-digest)
 
 A self-hosted reader pipeline. Two things in one container:
 
@@ -116,7 +116,7 @@ Tailscale-only, no auth. After `docker compose up -d`, browse to `http://<pi>:80
 
 ```
 ┌───────────────────────────────────────────────────────┐
-│  E-books & Morning Paper        [Pause]   [Trigger]   │
+│  Kiosk                          [Pause]   [Trigger]   │
 │  OPDS feed: http://<pi>:8080/opds/                    │
 ├───────────────────────────────────────────────────────┤
 │  Library                                  [Upload]    │

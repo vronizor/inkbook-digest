@@ -106,7 +106,7 @@ def root(request: Request) -> Response:
     ]
     body = templates.get_template("opds_navigation.xml").render(
         feed_id="urn:inkbook-digest:root",
-        feed_title="E-books & Morning Paper",
+        feed_title="Kiosk",
         updated=_now_iso(),
         self_url=f"{base}/opds/",
         entries=entries,
