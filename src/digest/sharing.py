@@ -188,6 +188,10 @@ def _domain(url: str | None) -> str:
     return netloc[4:] if netloc.startswith("www.") else netloc
 
 
+def describe_mode(share_tag: str) -> str:
+    return f"articles also tagged {share_tag!r}" if share_tag else "all digest articles (SHARE_TAG empty)"
+
+
 def is_shared(article: dict, share_tag: str) -> bool:
     return not share_tag or share_tag in tag_names(article)
 

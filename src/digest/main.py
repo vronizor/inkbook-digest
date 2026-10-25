@@ -83,6 +83,7 @@ def run_once(
         mode_bits.append("manual")
     mode = f" ({', '.join(mode_bits)})" if mode_bits else ""
     log.info(f"=== digest run start: {today.isoformat()}{mode} ===")
+    log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
 
     conn = store.connect(cfg.data_dir)
     store.prune_old_runs(conn)
@@ -244,6 +245,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     next_run = scheduler.get_job("daily-digest").next_run_time
     log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
     moved = store.migrate_root_epubs(cfg.data_dir)
     log.info(f"startup epub migration: {moved} file(s) moved to epubs/")
     if cfg.epub_retention_days > 0:
