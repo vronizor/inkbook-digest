@@ -10,11 +10,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from digest import config, epub, mailer, sharing, store
+from digest import config, epub, mailer, schedule, sharing, store
 from digest.reader import Reader, tag_names, word_count as reader_word_count
 
 _PKG_DIR = Path(__file__).parent
@@ -95,17 +94,11 @@ def run_once(
         return 0
 
     if not manual_trigger:
-        interval = store.get_digest_interval_days(conn)
-        last_day = store.get_last_sent_date(conn)
-        if interval > 1 and last_day:
-            days_since = (today - date.fromisoformat(last_day)).days
-            if days_since < interval:
-                log.info(
-                    f"interval not elapsed — last sent {last_day} ({days_since}d ago), "
-                    f"interval {interval}d; skipping"
-                )
-                store.record_run_end(conn, run_id, "interval-skip", log_buf.getvalue())
-                return 0
+        sched = schedule.load(conn)
+        if not schedule.is_on_week(sched, today):
+            log.info(f"off week for '{schedule.describe(sched)}' — skipping")
+            store.record_run_end(conn, run_id, "off-week", log_buf.getvalue())
+            return 0
 
     try:
         reader = Reader(cfg.reader_token)
@@ -236,15 +229,19 @@ async def lifespan(app: FastAPI):
     cfg = config.load(require_smtp=True)
     _setup_global_logging(cfg.log_level)
     _scaffold(cfg)
+    conn = store.connect(cfg.data_dir)
+    try:
+        sched = schedule.load(conn)
+    finally:
+        conn.close()
     scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
-    scheduler.add_job(
-        lambda: run_with_lock(cfg),
-        CronTrigger(hour=cfg.digest_hour, minute=cfg.digest_minute),
-        id="daily-digest",
-    )
+    scheduler.add_job(lambda: run_with_lock(cfg), schedule.trigger(sched, cfg.tz), id=schedule.JOB_ID)
     scheduler.start()
-    next_run = scheduler.get_job("daily-digest").next_run_time
-    log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
+    log.info(
+        f"scheduler started: {schedule.describe(sched)} ({cfg.tz}), "
+        f"next digest {upcoming[0].isoformat() if upcoming else 'none'}"
+    )
     log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
     moved = store.migrate_root_epubs(cfg.data_dir)
     log.info(f"startup epub migration: {moved} file(s) moved to epubs/")

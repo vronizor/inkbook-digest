@@ -283,31 +283,61 @@
   {% else %}<p class="no-data">no data yet</p>{% endif %}
 </section>
 
-<section class="settings">
+<section class="settings" id="settings">
   <h2>Settings</h2>
-  <form method="post" action="/word-budget" class="settings-form">
-    <label for="value">Daily word budget</label>
-    <input type="number" id="value" name="value" value="{{ word_budget }}" min="{{ wb_min }}" max="{{ wb_max }}" required>
-    <button type="submit">Save</button>
-    {% if budget_flash == "ok" %}
-      <span class="flash-inline flash-info">saved</span>
-    {% elif budget_flash == "invalid" %}
-      <span class="flash-inline flash-warn">invalid (must be {{ wb_min }}–{{ wb_max }})</span>
-    {% endif %}
+  {% if settings_flash == "ok" %}<div class="flash flash-info">Settings saved.</div>
+  {% elif settings_flash == "invalid" %}<div class="flash flash-warn">Not saved: {{ settings_detail }}.</div>
+  {% endif %}
+  <form method="post" action="/settings" class="settings-grid" id="settings-form" data-anchor="{{ sched.anchor.isoformat() }}">
+    <span class="settings-label">Send on</span>
+    <div class="settings-field">
+      <div class="sched-row">
+        <div class="day-chips" role="group" aria-label="Days of the week">
+          {% for i in range(7) %}
+          <label class="day-chip" title="{{ weekday_names[i] }}">
+            <input type="checkbox" name="days" value="{{ i }}"{% if i in sched.days %} checked{% endif %}>
+            <span aria-hidden="true">{{ "MTWTFSS"[i] }}</span><span class="sr-only">{{ weekday_names[i] }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <span class="muted">at</span>
+        <input type="time" name="time" value="{{ sched.time_str }}" required aria-label="Time">
+      </div>
+      <div class="presets">
+        <button type="button" class="link-btn" data-days="0,1,2,3,4,5,6">Every day</button>
+        <button type="button" class="link-btn" data-days="0,1,2,3,4">Weekdays</button>
+        <button type="button" class="link-btn" data-days="5,6">Weekends</button>
+      </div>
+      <div class="sched-row">
+        <label for="weeks" class="muted">Repeat every</label>
+        <input type="number" id="weeks" name="weeks" min="1" max="{{ weeks_max }}" value="{{ sched.weeks }}" class="num-small">
+        <span class="muted" id="weeks-word">week{{ "s" if sched.weeks != 1 }}</span>
+        <span class="start-group" id="start-group"{% if sched.weeks == 1 %} hidden{% endif %}>
+          <span class="muted">starting</span>
+          <span class="segmented" role="group" aria-label="First week">
+            <label><input type="radio" name="start" value="this"{% if sched.weeks > 1 and this_week_on %} checked{% endif %}><span>this week</span></label>
+            <label><input type="radio" name="start" value="next"{% if sched.weeks > 1 and next_week_on and not this_week_on %} checked{% endif %}><span>next week</span></label>
+          </span>
+        </span>
+      </div>
+      <p class="hint" id="sched-summary">{{ sched_summary }}{% if sched_upcoming %} · next <span class="ts">{{ sched_upcoming[0]|when }}</span>{% if sched_upcoming|length > 1 %}, then <span class="ts">{{ sched_upcoming[1]|when }}</span>{% endif %}{% endif %}</p>
+    </div>
+
+    <label for="word_budget" class="settings-label">Word budget per digest</label>
+    <div class="settings-field">
+      <div class="sched-row">
+        <input type="number" id="word_budget" name="word_budget" value="{{ word_budget }}" min="{{ wb_min }}" max="{{ wb_max }}" required>
+        <span class="muted">words</span>
+      </div>
+      <p class="hint">Soft cap: the digest stops after the article that pushes the total past it.</p>
+    </div>
+
+    <span></span>
+    <div class="settings-field sched-row">
+      <button type="submit">Save</button>
+      <span class="hint">Pause and Trigger in the header still work as before.</span>
+    </div>
   </form>
-  <p class="hint">Soft cap; the digest stops after the article that pushes the total above this number.</p>
-  <form method="post" action="/digest-interval" class="settings-form">
-    <label for="interval-value">Send every</label>
-    <input type="number" id="interval-value" name="value" value="{{ digest_interval }}" min="{{ interval_min }}" max="{{ interval_max }}" required>
-    <span>day{{ 's' if digest_interval != 1 else '' }}</span>
-    <button type="submit">Save</button>
-    {% if interval_flash == "ok" %}
-      <span class="flash-inline flash-info">saved</span>
-    {% elif interval_flash == "invalid" %}
-      <span class="flash-inline flash-warn">invalid (must be {{ interval_min }}–{{ interval_max }})</span>
-    {% endif %}
-  </form>
-  <p class="hint">Scheduled runs skip until this many days have passed since the last sent digest. Pause and Trigger still work.</p>
 </section>
 
 <script id="chart-data" type="application/json">{{ chart_data|tojson }}</script>
@@ -337,6 +367,76 @@
     }
   });
 
+  (function () {
+    const form = document.getElementById('settings-form');
+    if (!form) return;
+    const FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const savedAnchor = new Date(form.dataset.anchor + 'T00:00:00');
+    const monday = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+
+    function describe(days, t, weeks) {
+      const key = days.join(',');
+      if (days.length === 1) {
+        if (weeks === 1) return 'Every ' + FULL[days[0]] + ' at ' + t;
+        if (weeks === 2) return 'Every other ' + FULL[days[0]] + ' at ' + t;
+        return FULL[days[0]] + ' every ' + weeks + ' weeks at ' + t;
+      }
+      let base = days.length === 7 ? 'Every day at ' + t
+        : key === '0,1,2,3,4' ? 'Weekdays at ' + t
+        : key === '5,6' ? 'Weekends at ' + t
+        : days.map((i) => SHORT[i]).join(', ') + ' at ' + t;
+      if (weeks === 1) return base;
+      return base + (weeks === 2 ? ', every other week' : ', every ' + weeks + ' weeks');
+    }
+
+    function runs(days, t, weeks, anchor, count) {
+      const [h, m] = t.split(':').map(Number);
+      const now = new Date();
+      const out = [];
+      for (let i = 0; i < 7 * weeks * count + 14 && out.length < count; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m);
+        const offset = Math.round((monday(d) - anchor) / 604800000);
+        if (days.includes((d.getDay() + 6) % 7) && offset >= 0 && offset % weeks === 0 && d > now) out.push(d);
+      }
+      return out;
+    }
+
+    const fmt = (d) => SHORT[(d.getDay() + 6) % 7] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ', '
+      + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+
+    function update() {
+      const days = [...form.querySelectorAll('input[name=days]:checked')].map((x) => Number(x.value)).sort();
+      const t = form.time.value || '00:00';
+      const weeks = Math.max(1, Math.min(8, parseInt(form.weeks.value, 10) || 1));
+      document.getElementById('start-group').hidden = weeks === 1;
+      document.getElementById('weeks-word').textContent = weeks === 1 ? 'week' : 'weeks';
+      const summary = document.getElementById('sched-summary');
+      if (!days.length) {
+        summary.textContent = 'Pick at least one day. To stop scheduled runs, use Pause.';
+        summary.classList.add('error');
+        return;
+      }
+      summary.classList.remove('error');
+      const start = form.querySelector('input[name=start]:checked');
+      let anchor = savedAnchor;
+      if (weeks === 1 || (start && start.value === 'this')) anchor = monday(new Date());
+      else if (start && start.value === 'next') { anchor = monday(new Date()); anchor.setDate(anchor.getDate() + 7); }
+      const r = runs(days, t, weeks, anchor, 2);
+      summary.textContent = describe(days, t, weeks)
+        + (r[0] ? ' · next ' + fmt(r[0]) : '') + (r[1] ? ', then ' + fmt(r[1]) : '');
+    }
+
+    form.querySelectorAll('[data-days]').forEach((btn) => btn.addEventListener('click', () => {
+      const want = btn.dataset.days.split(',');
+      form.querySelectorAll('input[name=days]').forEach((x) => { x.checked = want.includes(x.value); });
+      update();
+    }));
+    form.addEventListener('input', update);
+    form.addEventListener('change', update);
+  })();
+
   function toggleMore(btn) {
     const rows = btn.previousElementSibling.querySelectorAll('tr.more');
     const opening = rows.length && rows[0].hidden;
@@ -351,7 +451,7 @@
   }
 
   setTimeout(() => {
-    document.querySelectorAll('#flashes .flash, .subscribers .flash').forEach(el => {
+    document.querySelectorAll('#flashes .flash, .subscribers .flash, .settings .flash').forEach(el => {
       el.style.transition = 'opacity .3s';
       el.style.opacity = '0';
       setTimeout(() => el.remove(), 300);

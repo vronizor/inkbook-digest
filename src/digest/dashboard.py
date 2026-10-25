@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import library, sharing, store
+from digest import library, schedule, sharing, store
 from digest.reader import Reader, word_count as reader_word_count
 
 log = logging.getLogger(__name__)
@@ -25,8 +25,6 @@ QUEUE_TTL_OK = 60
 QUEUE_TTL_ERR = 30
 WB_MIN = 500
 WB_MAX = 50000
-INTERVAL_MIN = 1
-INTERVAL_MAX = 99
 DELIVERY_LIMIT = 20
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -202,7 +200,7 @@ def dashboard(request: Request):
 
         paused = store.get_setting(conn, "paused") == "true"
         word_budget = store.get_word_budget(conn)
-        digest_interval = store.get_digest_interval_days(conn)
+        sched = schedule.load(conn)
         queue_stats, queue_error = _get_queue_stats(cfg, conn)
         chart = _chart_data(conn)
         books = library.list_books(conn)
@@ -214,11 +212,10 @@ def dashboard(request: Request):
     finally:
         conn.close()
 
-    next_run = None
-    if not paused:
-        job = scheduler.get_job("daily-digest")
-        if job and job.next_run_time:
-            next_run = job.next_run_time.isoformat()
+    now = datetime.now(ZoneInfo(cfg.tz))
+    upcoming = [r.isoformat() for r in schedule.next_runs(sched, now, 2)]
+    next_run = upcoming[0] if upcoming and not paused else None
+    today = now.date()
 
     upload_flashes = _upload_flashes(request)
     delete_flash = (
@@ -234,11 +231,16 @@ def dashboard(request: Request):
             "totals": totals, "digests": digests, "runs": runs, "articles": articles,
             "chart_data": chart, "word_budget": word_budget,
             "wb_min": WB_MIN, "wb_max": WB_MAX,
-            "digest_interval": digest_interval,
-            "interval_min": INTERVAL_MIN, "interval_max": INTERVAL_MAX,
+            "sched": sched,
+            "sched_summary": schedule.describe(sched),
+            "sched_upcoming": upcoming,
+            "this_week_on": schedule.is_on_week(sched, today),
+            "next_week_on": schedule.is_on_week(sched, today + timedelta(days=7)),
+            "weekday_names": schedule.FULL,
+            "weeks_max": schedule.WEEKS_MAX,
             "triggered": request.query_params.get("triggered"),
-            "budget_flash": request.query_params.get("budget"),
-            "interval_flash": request.query_params.get("interval"),
+            "settings_flash": request.query_params.get("settings"),
+            "settings_detail": request.query_params.get("detail", ""),
             "is_running": is_running.locked(),
             "books": books,
             "opds_url": _opds_url(cfg, request),
@@ -311,40 +313,54 @@ def pause(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/", status_code=303)
 
 
-@router.post("/word-budget")
-def word_budget(request: Request, value: str = Form(...)) -> RedirectResponse:
-    try:
-        n = int(value.strip())
-    except (ValueError, AttributeError):
-        return RedirectResponse(url="/?budget=invalid", status_code=303)
-    if n < WB_MIN or n > WB_MAX:
-        return RedirectResponse(url="/?budget=invalid", status_code=303)
-    cfg = request.app.state.cfg
-    conn = store.connect(cfg.data_dir)
-    try:
-        store.set_setting(conn, "word_budget", str(n))
-        log.info(f"word_budget updated to {n}")
-    finally:
-        conn.close()
-    return RedirectResponse(url="/?budget=ok", status_code=303)
+def _settings_redirect(flash: str, detail: str = "") -> RedirectResponse:
+    qs = f"settings={flash}" + (f"&detail={quote(detail, safe='')}" if detail else "")
+    return RedirectResponse(url=f"/?{qs}#settings", status_code=303)
 
 
-@router.post("/digest-interval")
-def digest_interval(request: Request, value: str = Form(...)) -> RedirectResponse:
-    try:
-        n = int(value.strip())
-    except (ValueError, AttributeError):
-        return RedirectResponse(url="/?interval=invalid", status_code=303)
-    if n < INTERVAL_MIN or n > INTERVAL_MAX:
-        return RedirectResponse(url="/?interval=invalid", status_code=303)
+@router.post("/settings")
+def save_settings(
+    request: Request,
+    days: list[str] = Form([]),
+    send_time: str = Form(..., alias="time"),
+    weeks: str = Form("1"),
+    start: str = Form("keep"),
+    word_budget: str = Form(...),
+) -> RedirectResponse:
     cfg = request.app.state.cfg
+    try:
+        day_tuple = schedule.parse_days(",".join(days))
+    except ValueError:
+        return _settings_redirect("invalid", "pick at least one day")
+    try:
+        hour, minute = schedule.parse_time(send_time)
+        n_weeks = int(weeks)
+        budget = int(word_budget.strip())
+    except ValueError:
+        return _settings_redirect("invalid", "check the time, weeks and word budget")
+    if not 1 <= n_weeks <= schedule.WEEKS_MAX:
+        return _settings_redirect("invalid", f"repeat must be 1–{schedule.WEEKS_MAX} weeks")
+    if not WB_MIN <= budget <= WB_MAX:
+        return _settings_redirect("invalid", f"word budget must be {WB_MIN}–{WB_MAX}")
+
+    this_monday = schedule.monday(datetime.now(ZoneInfo(cfg.tz)).date())
     conn = store.connect(cfg.data_dir)
     try:
-        store.set_setting(conn, "digest_interval_days", str(n))
-        log.info(f"digest_interval_days updated to {n}")
+        current = schedule.load(conn)
+        if n_weeks == 1 or start == "this":
+            anchor = this_monday
+        elif start == "next":
+            anchor = this_monday + timedelta(days=7)
+        else:
+            anchor = current.anchor
+        new = schedule.Schedule(day_tuple, hour, minute, n_weeks, anchor)
+        schedule.save(conn, new)
+        store.set_setting(conn, "word_budget", str(budget))
     finally:
         conn.close()
-    return RedirectResponse(url="/?interval=ok", status_code=303)
+    request.app.state.scheduler.reschedule_job(schedule.JOB_ID, trigger=schedule.trigger(new, cfg.tz))
+    log.info(f"settings saved: {schedule.describe(new)} (anchor {anchor}), word budget {budget}")
+    return _settings_redirect("ok")
 
 
 def _upload_size(upload: UploadFile) -> int:

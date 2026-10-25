@@ -77,7 +77,7 @@ python -m digest.main --dry-run                      # CLI: build EPUB only, no 
 python -m digest.main --once --manual                # CLI: bypass paused setting
 ```
 
-In **server mode** (the container default) FastAPI runs the dashboard, the OPDS endpoints, and an APScheduler `BackgroundScheduler` that fires the daily run at `DIGEST_HOUR:DIGEST_MINUTE`. A `threading.Lock` gates scheduled and triggered runs.
+In **server mode** (the container default) FastAPI runs the dashboard, the OPDS endpoints, and an APScheduler `BackgroundScheduler` that fires runs on the schedule set in the dashboard (days of the week, time, every N weeks — see [SPEC_V5.md](SPEC_V5.md)). A `threading.Lock` gates scheduled and triggered runs.
 
 ## Reader API behaviour (verified)
 
@@ -118,7 +118,7 @@ BASE_URL=                           # optional; the publicly-reachable host, e.g
 
 **`BASE_URL` matters for OPDS.** KOReader needs absolute URLs in feed entries. Set `BASE_URL` to the Tailscale hostname (or whatever the device hits) so links resolve cleanly across devices. If unset, the request host is used, which may not be reachable from the device that fetched the feed.
 
-**Word budget precedence**: `WORD_BUDGET` seeds the `settings` table on first startup. After that, the dashboard input edits `settings.word_budget` directly and the env var is ignored. Edit via dashboard → Settings → Daily word budget. Valid range: 500 – 50,000.
+**Word budget precedence**: `WORD_BUDGET` seeds the `settings` table on first startup. After that, the dashboard input edits `settings.word_budget` directly and the env var is ignored. Edit via dashboard → Settings → Word budget per digest. Valid range: 500 – 50,000.
 
 ## Dashboard
 
@@ -143,12 +143,15 @@ Tailscale-only, no auth. After `docker compose up -d`, browse to `http://<pi>:80
 ├───────────────────────────────────────────────────────┤
 │  Articles per day, last 30 days  [bar chart]          │
 ├───────────────────────────────────────────────────────┤
-│  Recent digests   (last 30, with ↓ epub link)         │
-│  Recent runs      (last 30, expandable logs)          │
-│  Recently sent articles                               │
+│  Recent digests   (last 5, show more; ↓ epub link)    │
+│  Recent runs      (last 5, show more; logs)           │
+│  Recently sent articles (last 5, show more)           │
 ├───────────────────────────────────────────────────────┤
-│  Settings (rarely needed)                             │
-│   Daily word budget  [ 5000 ]  [Save]                 │
+│  Settings                                             │
+│   Send on   (M)(T)(W)(T)(F)(S)(S) at [07:30]          │
+│             Repeat every [1] week                     │
+│   Word budget per digest  [ 3000 ]                    │
+│   [Save]                                              │
 └───────────────────────────────────────────────────────┘
 ```
 
