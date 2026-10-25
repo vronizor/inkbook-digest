@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>Kiosk</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
@@ -79,6 +79,7 @@
   {% if sub_flash == "added" %}<div class="flash flash-info">Added {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "exists" %}<div class="flash flash-warn">{{ sub_flash_detail }} is already subscribed.</div>
   {% elif sub_flash == "invalid" %}<div class="flash flash-warn">Invalid subscriber{% if sub_flash_detail %}: {{ sub_flash_detail }}{% endif %}.</div>
+  {% elif sub_flash == "version" %}<div class="flash flash-info">{{ sub_flash_detail }}.</div>
   {% elif sub_flash == "removed" %}<div class="flash flash-info">Removed {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "sent" %}<div class="flash flash-info">Latest issue sent to {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "send_failed" %}<div class="flash flash-warn">Send failed: {{ sub_flash_detail }}</div>
@@ -104,7 +105,13 @@
       <tr class="{{ '' if s.active else 'inactive' }}">
         <td>{{ s.name or "—" }}</td>
         <td>{{ s.email }}</td>
-        <td>{{ s.format }}{% if not s.active %} <span class="no-data">(paused)</span>{% endif %}</td>
+        <td>
+          <form method="post" action="/subscribers/{{ s.id }}/version" class="inline">
+            <select name="version" class="version-select" onchange="this.form.submit()">
+              {% for c in subscription_choices %}<option value="{{ c }}"{% if c == s.format %} selected{% endif %}>{{ c }}</option>{% endfor %}
+            </select>
+          </form>{% if not s.active %} <span class="no-data">(paused)</span>{% endif %}
+        </td>
         <td>
           {% if s.last %}
             <span class="status-{{ s.last.status }}" {% if s.last.error %}title="{{ s.last.error }}"{% endif %}>{{ s.last.status }}</span>

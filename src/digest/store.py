@@ -298,6 +298,10 @@ def toggle_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> None:
     conn.execute("UPDATE subscribers SET active = 1 - active WHERE id = ?", (subscriber_id,))
 
 
+def set_subscriber_format(conn: sqlite3.Connection, subscriber_id: int, fmt: str) -> None:
+    conn.execute("UPDATE subscribers SET format = ? WHERE id = ?", (fmt, subscriber_id))
+
+
 def delete_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> None:
     conn.execute("DELETE FROM subscribers WHERE id = ?", (subscriber_id,))
 

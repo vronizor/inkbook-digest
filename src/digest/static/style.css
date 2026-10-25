@@ -122,3 +122,4 @@ form.inline { display: inline; margin: 0; }
   .sub-table th:nth-child(1), .sub-table td:nth-child(1) { display: none; }
   .sub-add input[type="email"] { min-width: 0; flex: 1; }
 }
+.version-select { font: inherit; padding: 0.15em 0.3em; border: 1px solid var(--border); border-radius: 3px; background: white; }

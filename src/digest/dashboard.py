@@ -55,6 +55,7 @@ def _human_size(b):
 
 templates.env.filters["domain"] = _domain
 templates.env.filters["human_size"] = _human_size
+templates.env.globals["asset_version"] = int((_PKG_DIR / "static" / "style.css").stat().st_mtime)
 
 
 def _opds_url(cfg, request: Request) -> str:
@@ -421,6 +422,23 @@ def subscriber_toggle(subscriber_id: int, request: Request) -> RedirectResponse:
     finally:
         conn.close()
     return RedirectResponse(url="/#subscribers", status_code=303)
+
+
+@router.post("/subscribers/{subscriber_id}/version")
+def subscriber_version(subscriber_id: int, request: Request, version: str = Form(...)) -> RedirectResponse:
+    if version not in sharing.SUBSCRIPTION_CHOICES:
+        return _sub_redirect("invalid", version)
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        store.set_subscriber_format(conn, subscriber_id, version)
+    finally:
+        conn.close()
+    log.info(f"subscriber {sub['email']} version: {sub['format']} -> {version}")
+    return _sub_redirect("version", f"{sub['email']} now gets {version}")
 
 
 @router.post("/subscribers/{subscriber_id}/delete")
