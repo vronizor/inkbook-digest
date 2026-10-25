@@ -105,3 +105,56 @@ dialog p { margin: 0 0 1em; }
 .dialog-actions { display: flex; gap: 0.5em; justify-content: flex-end; }
 .dialog-actions button { background: #888; }
 .dialog-actions .btn-danger { background: var(--error); }
+
+.status-failed { color: var(--error); }
+form.inline { display: inline; margin: 0; }
+.btn-small { padding: 0.2em 0.7em; font-size: 0.85em; }
+.btn-grey { background: #888; }
+.sub-table tr.inactive td { color: var(--muted); }
+.sub-actions { white-space: nowrap; text-align: right; }
+.sub-add { margin-top: 0.8em; }
+.sub-add input, .sub-add select { font: inherit; padding: 0.3em 0.5em; border: 1px solid var(--border); border-radius: 3px; background: white; }
+.sub-add input[type="email"] { min-width: 16em; }
+.deliveries { margin-top: 1em; }
+.deliveries table { margin-top: 0.5em; font-size: 0.9em; }
+.subscribers code { background: #eee; padding: 0.1em 0.4em; border-radius: 3px; }
+@media (max-width: 640px) {
+  .sub-table th:nth-child(1), .sub-table td:nth-child(1) { display: none; }
+  .sub-add input[type="email"] { min-width: 0; flex: 1; }
+}
+.version-select { font: inherit; padding: 0.15em 0.3em; border: 1px solid var(--border); border-radius: 3px; background: white; }
+.show-more { background: none; color: var(--muted); padding: 0.4em 0; font-size: 0.85em; }
+.show-more:hover { color: var(--accent); filter: none; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.muted { color: var(--muted); }
+.settings-grid { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 1.4em 1.5em; align-items: start; }
+.settings-label { color: var(--muted); padding-top: 0.5em; }
+.settings-field { display: flex; flex-direction: column; gap: 0.7em; min-width: 0; }
+.settings-field .hint { margin: 0; }
+.sched-row { display: flex; align-items: center; gap: 0.6em 0.75em; flex-wrap: wrap; }
+.settings-grid input[type="time"], .settings-grid input[type="number"] { font: inherit; min-height: 2.6em; box-sizing: border-box; padding: 0 0.6em; border: 1px solid #cfcfcf; border-radius: 6px; background: white; color: var(--fg); }
+.settings-grid input[type="number"] { width: 7.5em; }
+.settings-grid input.num-small { width: 4.5em; }
+.day-chips { display: inline-flex; gap: 6px; }
+.day-chip { position: relative; cursor: pointer; }
+.day-chip input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.day-chip span[aria-hidden] { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border: 1px solid #cfcfcf; border-radius: 22px; background: white; font-size: 0.95em; user-select: none; }
+.day-chip input:checked + span { background: var(--fg); border-color: var(--fg); color: white; font-weight: 600; }
+.day-chip input:focus-visible + span, .segmented input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.presets { display: flex; gap: 0.2em; flex-wrap: wrap; margin-top: -0.3em; }
+.link-btn { background: none; color: var(--fg); padding: 0.2em 0.5em; font-size: 0.9em; text-decoration: underline; text-decoration-color: var(--border); text-underline-offset: 3px; }
+.link-btn:hover { color: var(--accent); }
+.start-group { display: inline-flex; align-items: center; gap: 0.75em; }
+.start-group[hidden] { display: none; }
+.segmented { display: inline-flex; border: 1px solid #cfcfcf; border-radius: 6px; overflow: hidden; background: white; }
+.segmented label { position: relative; cursor: pointer; }
+.segmented label + label span { border-left: 1px solid var(--border); }
+.segmented input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.segmented span { display: inline-flex; align-items: center; min-height: 2.6em; padding: 0 0.9em; font-size: 0.95em; }
+.segmented input:checked + span { background: var(--fg); color: white; }
+@media (max-width: 640px) {
+  .settings-grid { grid-template-columns: minmax(0, 1fr); gap: 0.4em; }
+  .settings-label { padding-top: 0.8em; }
+  .day-chip span[aria-hidden] { width: 40px; height: 40px; }
+}

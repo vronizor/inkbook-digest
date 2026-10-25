@@ -10,11 +10,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from digest import config, epub, mailer, store
+from digest import config, epub, mailer, schedule, sharing, store
 from digest.reader import Reader, tag_names, word_count as reader_word_count
 
 _PKG_DIR = Path(__file__).parent
@@ -83,6 +82,7 @@ def run_once(
         mode_bits.append("manual")
     mode = f" ({', '.join(mode_bits)})" if mode_bits else ""
     log.info(f"=== digest run start: {today.isoformat()}{mode} ===")
+    log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
 
     conn = store.connect(cfg.data_dir)
     store.prune_old_runs(conn)
@@ -94,17 +94,11 @@ def run_once(
         return 0
 
     if not manual_trigger:
-        interval = store.get_digest_interval_days(conn)
-        last_day = store.get_last_sent_date(conn)
-        if interval > 1 and last_day:
-            days_since = (today - date.fromisoformat(last_day)).days
-            if days_since < interval:
-                log.info(
-                    f"interval not elapsed — last sent {last_day} ({days_since}d ago), "
-                    f"interval {interval}d; skipping"
-                )
-                store.record_run_end(conn, run_id, "interval-skip", log_buf.getvalue())
-                return 0
+        sched = schedule.load(conn)
+        if not schedule.is_on_week(sched, today):
+            log.info(f"off week for '{schedule.describe(sched)}' — skipping")
+            store.record_run_end(conn, run_id, "off-week", log_buf.getvalue())
+            return 0
 
     try:
         reader = Reader(cfg.reader_token)
@@ -154,6 +148,10 @@ def run_once(
             )
 
             if dry_run:
+                try:
+                    sharing.render_dry_run(cfg, today, volume, articles_only)
+                except Exception as e:
+                    log.exception(f"dry-run sharing render failed: {e}")
                 store.record_run_end(conn, run_id, "ok", log_buf.getvalue())
                 log.info(f"=== dry-run done: {len(selected)} articles, epub at {out_path} ===")
                 log.info("dry-run: skipped Reader tag-add and sent_articles recording")
@@ -175,10 +173,12 @@ def run_once(
                     tag_errors.append(f"{a['id']}: {e}")
                     log.warning(f"failed to add done-tag to {a['id']}: {e}")
 
-            outcome = "ok" if not tag_errors else "error"
+            share_errors = sharing.share_digest(cfg, conn, digest_id, today, volume, articles_only)
+
+            outcome = "ok" if not (tag_errors or share_errors) else "error"
             store.record_run_end(conn, run_id, outcome, log_buf.getvalue())
 
-            if tag_errors:
+            if tag_errors or share_errors:
                 _try_send_alert(cfg, today, log_buf.getvalue(),
                                 f"[inkbook-digest] partial failure on {today.isoformat()}")
             log.info(f"=== digest run done: {len(selected)} articles, {total_words} words, vol {volume} ===")
@@ -229,15 +229,20 @@ async def lifespan(app: FastAPI):
     cfg = config.load(require_smtp=True)
     _setup_global_logging(cfg.log_level)
     _scaffold(cfg)
+    conn = store.connect(cfg.data_dir)
+    try:
+        sched = schedule.load(conn)
+    finally:
+        conn.close()
     scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
-    scheduler.add_job(
-        lambda: run_with_lock(cfg),
-        CronTrigger(hour=cfg.digest_hour, minute=cfg.digest_minute),
-        id="daily-digest",
-    )
+    scheduler.add_job(lambda: run_with_lock(cfg), schedule.trigger(sched, cfg.tz), id=schedule.JOB_ID)
     scheduler.start()
-    next_run = scheduler.get_job("daily-digest").next_run_time
-    log.info(f"scheduler started, next run: {next_run.isoformat()} ({cfg.tz})")
+    upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
+    log.info(
+        f"scheduler started: {schedule.describe(sched)} ({cfg.tz}), "
+        f"next digest {upcoming[0].isoformat() if upcoming else 'none'}"
+    )
+    log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
     moved = store.migrate_root_epubs(cfg.data_dir)
     log.info(f"startup epub migration: {moved} file(s) moved to epubs/")
     if cfg.epub_retention_days > 0:

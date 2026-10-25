@@ -44,6 +44,10 @@ class Config:
 
     extra_catalogs: tuple[tuple[str, str], ...] = ()
 
+    share_tag: str = "toshare"
+    share_sender_name: str = "Morning Paper"
+    share_reply_to: str = ""
+
 
 def _parse_catalogs(raw: str) -> tuple[tuple[str, str], ...]:
     catalogs = []
@@ -87,6 +91,9 @@ def load(*, require_smtp: bool = True) -> Config:
             base_url=os.environ.get("BASE_URL", "").rstrip("/"),
             epub_retention_days=int(os.environ.get("EPUB_RETENTION_DAYS", "0")),
             extra_catalogs=_parse_catalogs(os.environ.get("EXTRA_CATALOGS", "")),
+            share_tag=os.environ.get("SHARE_TAG", "toshare").strip(),
+            share_sender_name=os.environ.get("SHARE_SENDER_NAME", "Morning Paper").strip(),
+            share_reply_to=os.environ.get("SHARE_REPLY_TO", "").strip(),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)

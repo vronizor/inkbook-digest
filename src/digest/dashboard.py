@@ -1,14 +1,17 @@
 import logging
+import os
+import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import library, store
+from digest import library, schedule, sharing, store
 from digest.reader import Reader, word_count as reader_word_count
 
 log = logging.getLogger(__name__)
@@ -22,8 +25,8 @@ QUEUE_TTL_OK = 60
 QUEUE_TTL_ERR = 30
 WB_MIN = 500
 WB_MAX = 50000
-INTERVAL_MIN = 1
-INTERVAL_MAX = 99
+DELIVERY_LIMIT = 20
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _queue_cache: dict = {"data": None, "expires": 0.0, "error": None}
 
@@ -52,6 +55,24 @@ def _human_size(b):
 
 templates.env.filters["domain"] = _domain
 templates.env.filters["human_size"] = _human_size
+
+
+def _when(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    if dt.tzinfo is None:
+        return iso
+    local = dt.astimezone(ZoneInfo(os.environ.get("TZ", "Europe/Paris")))
+    year = "" if local.year == datetime.now(local.tzinfo).year else f" {local.year}"
+    return f"{local:%a} {local.day} {local:%b}{year}, {local:%H:%M}"
+
+
+templates.env.filters["when"] = _when
+templates.env.globals["asset_version"] = int((_PKG_DIR / "static" / "style.css").stat().st_mtime)
 
 
 def _opds_url(cfg, request: Request) -> str:
@@ -179,18 +200,22 @@ def dashboard(request: Request):
 
         paused = store.get_setting(conn, "paused") == "true"
         word_budget = store.get_word_budget(conn)
-        digest_interval = store.get_digest_interval_days(conn)
+        sched = schedule.load(conn)
         queue_stats, queue_error = _get_queue_stats(cfg, conn)
         chart = _chart_data(conn)
         books = library.list_books(conn)
+        subscribers = store.list_subscribers(conn)
+        last_delivery = store.last_delivery_by_email(conn)
+        for sub in subscribers:
+            sub["last"] = last_delivery.get(sub["email"])
+        deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
     finally:
         conn.close()
 
-    next_run = None
-    if not paused:
-        job = scheduler.get_job("daily-digest")
-        if job and job.next_run_time:
-            next_run = job.next_run_time.isoformat()
+    now = datetime.now(ZoneInfo(cfg.tz))
+    upcoming = [r.isoformat() for r in schedule.next_runs(sched, now, 2)]
+    next_run = upcoming[0] if upcoming and not paused else None
+    today = now.date()
 
     upload_flashes = _upload_flashes(request)
     delete_flash = (
@@ -206,16 +231,28 @@ def dashboard(request: Request):
             "totals": totals, "digests": digests, "runs": runs, "articles": articles,
             "chart_data": chart, "word_budget": word_budget,
             "wb_min": WB_MIN, "wb_max": WB_MAX,
-            "digest_interval": digest_interval,
-            "interval_min": INTERVAL_MIN, "interval_max": INTERVAL_MAX,
+            "sched": sched,
+            "sched_summary": schedule.describe(sched),
+            "sched_upcoming": upcoming,
+            "this_week_on": schedule.is_on_week(sched, today),
+            "next_week_on": schedule.is_on_week(sched, today + timedelta(days=7)),
+            "weekday_names": schedule.FULL,
+            "weeks_max": schedule.WEEKS_MAX,
             "triggered": request.query_params.get("triggered"),
-            "budget_flash": request.query_params.get("budget"),
-            "interval_flash": request.query_params.get("interval"),
+            "settings_flash": request.query_params.get("settings"),
+            "settings_detail": request.query_params.get("detail", ""),
             "is_running": is_running.locked(),
             "books": books,
             "opds_url": _opds_url(cfg, request),
             "upload_flashes": upload_flashes,
             "delete_flash": delete_flash,
+            "subscribers": subscribers,
+            "deliveries": deliveries,
+            "latest_issue": sharing.latest_issue(cfg.data_dir),
+            "share_tag": cfg.share_tag,
+            "subscription_choices": sharing.SUBSCRIPTION_CHOICES,
+            "sub_flash": request.query_params.get("sub"),
+            "sub_flash_detail": request.query_params.get("detail", ""),
         },
     )
 
@@ -276,40 +313,54 @@ def pause(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/", status_code=303)
 
 
-@router.post("/word-budget")
-def word_budget(request: Request, value: str = Form(...)) -> RedirectResponse:
-    try:
-        n = int(value.strip())
-    except (ValueError, AttributeError):
-        return RedirectResponse(url="/?budget=invalid", status_code=303)
-    if n < WB_MIN or n > WB_MAX:
-        return RedirectResponse(url="/?budget=invalid", status_code=303)
-    cfg = request.app.state.cfg
-    conn = store.connect(cfg.data_dir)
-    try:
-        store.set_setting(conn, "word_budget", str(n))
-        log.info(f"word_budget updated to {n}")
-    finally:
-        conn.close()
-    return RedirectResponse(url="/?budget=ok", status_code=303)
+def _settings_redirect(flash: str, detail: str = "") -> RedirectResponse:
+    qs = f"settings={flash}" + (f"&detail={quote(detail, safe='')}" if detail else "")
+    return RedirectResponse(url=f"/?{qs}#settings", status_code=303)
 
 
-@router.post("/digest-interval")
-def digest_interval(request: Request, value: str = Form(...)) -> RedirectResponse:
-    try:
-        n = int(value.strip())
-    except (ValueError, AttributeError):
-        return RedirectResponse(url="/?interval=invalid", status_code=303)
-    if n < INTERVAL_MIN or n > INTERVAL_MAX:
-        return RedirectResponse(url="/?interval=invalid", status_code=303)
+@router.post("/settings")
+def save_settings(
+    request: Request,
+    days: list[str] = Form([]),
+    send_time: str = Form(..., alias="time"),
+    weeks: str = Form("1"),
+    start: str = Form("keep"),
+    word_budget: str = Form(...),
+) -> RedirectResponse:
     cfg = request.app.state.cfg
+    try:
+        day_tuple = schedule.parse_days(",".join(days))
+    except ValueError:
+        return _settings_redirect("invalid", "pick at least one day")
+    try:
+        hour, minute = schedule.parse_time(send_time)
+        n_weeks = int(weeks)
+        budget = int(word_budget.strip())
+    except ValueError:
+        return _settings_redirect("invalid", "check the time, weeks and word budget")
+    if not 1 <= n_weeks <= schedule.WEEKS_MAX:
+        return _settings_redirect("invalid", f"repeat must be 1–{schedule.WEEKS_MAX} weeks")
+    if not WB_MIN <= budget <= WB_MAX:
+        return _settings_redirect("invalid", f"word budget must be {WB_MIN}–{WB_MAX}")
+
+    this_monday = schedule.monday(datetime.now(ZoneInfo(cfg.tz)).date())
     conn = store.connect(cfg.data_dir)
     try:
-        store.set_setting(conn, "digest_interval_days", str(n))
-        log.info(f"digest_interval_days updated to {n}")
+        current = schedule.load(conn)
+        if n_weeks == 1 or start == "this":
+            anchor = this_monday
+        elif start == "next":
+            anchor = this_monday + timedelta(days=7)
+        else:
+            anchor = current.anchor
+        new = schedule.Schedule(day_tuple, hour, minute, n_weeks, anchor)
+        schedule.save(conn, new)
+        store.set_setting(conn, "word_budget", str(budget))
     finally:
         conn.close()
-    return RedirectResponse(url="/?interval=ok", status_code=303)
+    request.app.state.scheduler.reschedule_job(schedule.JOB_ID, trigger=schedule.trigger(new, cfg.tz))
+    log.info(f"settings saved: {schedule.describe(new)} (anchor {anchor}), word budget {budget}")
+    return _settings_redirect("ok")
 
 
 def _upload_size(upload: UploadFile) -> int:
@@ -368,3 +419,102 @@ def library_delete(book_id: int, request: Request) -> RedirectResponse:
     return RedirectResponse(
         url=f"/?library_delete=ok&name={quote(name, safe='')}", status_code=303
     )
+
+
+def _sub_redirect(flash: str, detail: str = "") -> RedirectResponse:
+    qs = f"sub={flash}" + (f"&detail={quote(detail, safe='')}" if detail else "")
+    return RedirectResponse(url=f"/?{qs}#subscribers", status_code=303)
+
+
+@router.post("/subscribers")
+def subscriber_add(
+    request: Request,
+    email: str = Form(...),
+    name: str = Form(""),
+    version: str = Form("full"),
+) -> RedirectResponse:
+    email = email.strip().lower()
+    if not _EMAIL_RE.match(email) or version not in sharing.SUBSCRIPTION_CHOICES:
+        return _sub_redirect("invalid", email)
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        added = store.add_subscriber(conn, email, name.strip(), version)
+    finally:
+        conn.close()
+    if not added:
+        return _sub_redirect("exists", email)
+    log.info(f"subscriber added: {email} ({version})")
+    return _sub_redirect("added", email)
+
+
+@router.post("/subscribers/{subscriber_id}/toggle")
+def subscriber_toggle(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        store.toggle_subscriber(conn, subscriber_id)
+    finally:
+        conn.close()
+    return RedirectResponse(url="/#subscribers", status_code=303)
+
+
+@router.post("/subscribers/{subscriber_id}/version")
+def subscriber_version(subscriber_id: int, request: Request, version: str = Form(...)) -> RedirectResponse:
+    if version not in sharing.SUBSCRIPTION_CHOICES:
+        return _sub_redirect("invalid", version)
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        store.set_subscriber_format(conn, subscriber_id, version)
+    finally:
+        conn.close()
+    log.info(f"subscriber {sub['email']} version: {sub['format']} -> {version}")
+    return _sub_redirect("version", f"{sub['email']} now gets {version}")
+
+
+@router.post("/subscribers/{subscriber_id}/delete")
+def subscriber_delete(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        store.delete_subscriber(conn, subscriber_id)
+    finally:
+        conn.close()
+    if sub:
+        log.info(f"subscriber removed: {sub['email']}")
+    return _sub_redirect("removed", sub["email"] if sub else "")
+
+
+@router.post("/subscribers/{subscriber_id}/send-latest")
+def subscriber_send_latest(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    issue = sharing.latest_issue(cfg.data_dir)
+    if not issue:
+        return _sub_redirect("nothing")
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        errors = sharing.deliver(cfg, conn, issue, sub, manual=True)
+    finally:
+        conn.close()
+    if errors:
+        return _sub_redirect("send_failed", "; ".join(errors)[:300])
+    return _sub_redirect("sent", sub["email"])
+
+
+@router.get("/issues/{digest_id}/{fmt}", response_class=HTMLResponse)
+def issue_preview(digest_id: int, fmt: str, request: Request):
+    if fmt not in sharing.FORMATS:
+        return PlainTextResponse("not found", status_code=404)
+    cfg = request.app.state.cfg
+    path = sharing.emails_dir(cfg.data_dir, digest_id) / f"{fmt}.html"
+    if not path.exists():
+        return PlainTextResponse("not found", status_code=404)
+    return HTMLResponse(path.read_text())
