@@ -1,9 +1,11 @@
 import logging
+import os
 import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
@@ -55,6 +57,23 @@ def _human_size(b):
 
 templates.env.filters["domain"] = _domain
 templates.env.filters["human_size"] = _human_size
+
+
+def _when(iso: str | None) -> str:
+    if not iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return iso
+    if dt.tzinfo is None:
+        return iso
+    local = dt.astimezone(ZoneInfo(os.environ.get("TZ", "Europe/Paris")))
+    year = "" if local.year == datetime.now(local.tzinfo).year else f" {local.year}"
+    return f"{local:%a} {local.day} {local:%b}{year}, {local:%H:%M}"
+
+
+templates.env.filters["when"] = _when
 templates.env.globals["asset_version"] = int((_PKG_DIR / "static" / "style.css").stat().st_mtime)
 
 

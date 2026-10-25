@@ -123,3 +123,5 @@ form.inline { display: inline; margin: 0; }
   .sub-add input[type="email"] { min-width: 0; flex: 1; }
 }
 .version-select { font: inherit; padding: 0.15em 0.3em; border: 1px solid var(--border); border-radius: 3px; background: white; }
+.show-more { background: none; color: var(--muted); padding: 0.4em 0; font-size: 0.85em; }
+.show-more:hover { color: var(--accent); filter: none; }
