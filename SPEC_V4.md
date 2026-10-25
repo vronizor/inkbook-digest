@@ -66,7 +66,7 @@ After the EPUB is built and Reader tags are added. A delivery failure is recorde
 A **Subscribers** section:
 
 - Last shared issue, with preview links for both formats
-- Subscriber list: name, email, format, last delivery status, actions (send latest issue, pause/resume, remove)
+- Subscriber list: name, email, version (editable inline), last delivery status, actions (send latest issue, pause/resume, remove)
 - Add form: name, email, version (full / teaser / both)
 - Recent deliveries (last 20) in a collapsible table
 
