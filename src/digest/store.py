@@ -51,6 +51,27 @@ CREATE TABLE IF NOT EXISTS library_books (
   has_cover INTEGER NOT NULL DEFAULT 0,
   added_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS subscribers (
+  id INTEGER PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  name TEXT,
+  format TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  added_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deliveries (
+  id INTEGER PRIMARY KEY,
+  digest_id INTEGER NOT NULL REFERENCES digests(id),
+  email TEXT NOT NULL,
+  format TEXT NOT NULL,
+  status TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  manual INTEGER NOT NULL DEFAULT 0,
+  sent_at TEXT NOT NULL
+);
 """
 
 ADDITIVE_ALTERS = (
@@ -243,3 +264,82 @@ def get_today_volume_number(conn: sqlite3.Connection) -> int:
         "WHERE DATE(sent_at) = DATE('now') AND status = 'sent'"
     ).fetchone()
     return (row[0] or 0) + 1
+
+
+def list_subscribers(conn: sqlite3.Connection, *, active_only: bool = False) -> list[dict]:
+    sql = "SELECT id, email, name, format, active, added_at FROM subscribers"
+    if active_only:
+        sql += " WHERE active = 1"
+    sql += " ORDER BY added_at"
+    return [
+        {"id": r[0], "email": r[1], "name": r[2], "format": r[3], "active": bool(r[4]), "added_at": r[5]}
+        for r in conn.execute(sql)
+    ]
+
+
+def get_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT id, email, name, format, active FROM subscribers WHERE id = ?", (subscriber_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "email": row[1], "name": row[2], "format": row[3], "active": bool(row[4])}
+
+
+def add_subscriber(conn: sqlite3.Connection, email: str, name: str, fmt: str) -> bool:
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO subscribers (email, name, format, added_at) VALUES (?, ?, ?, ?)",
+        (email, name or None, fmt, _now()),
+    )
+    return cur.rowcount == 1
+
+
+def toggle_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> None:
+    conn.execute("UPDATE subscribers SET active = 1 - active WHERE id = ?", (subscriber_id,))
+
+
+def delete_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> None:
+    conn.execute("DELETE FROM subscribers WHERE id = ?", (subscriber_id,))
+
+
+def record_delivery(
+    conn: sqlite3.Connection,
+    digest_id: int,
+    email: str,
+    fmt: str,
+    status: str,
+    size_bytes: int = 0,
+    error: str | None = None,
+    manual: bool = False,
+) -> None:
+    conn.execute(
+        "INSERT INTO deliveries (digest_id, email, format, status, size_bytes, error, manual, sent_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (digest_id, email, fmt, status, size_bytes, error, int(manual), _now()),
+    )
+
+
+def last_delivery_by_email(conn: sqlite3.Connection) -> dict[str, dict]:
+    rows = conn.execute(
+        "SELECT email, status, sent_at, error FROM deliveries d "
+        "WHERE id = (SELECT MAX(id) FROM deliveries WHERE email = d.email)"
+    )
+    return {r[0]: {"status": r[1], "sent_at": r[2], "error": r[3]} for r in rows}
+
+
+def recent_deliveries(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
+    rows = conn.execute(
+        "SELECT d.id, d.digest_id, d.email, d.format, d.status, d.size_bytes, d.error, d.manual, "
+        "d.sent_at, g.sent_at, g.volume "
+        "FROM deliveries d LEFT JOIN digests g ON g.id = d.digest_id "
+        "ORDER BY d.id DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {
+            "id": r[0], "digest_id": r[1], "email": r[2], "format": r[3], "status": r[4],
+            "size_bytes": r[5], "error": r[6], "manual": bool(r[7]), "sent_at": r[8],
+            "issue_date": (r[9] or "")[:10], "volume": r[10] or 1,
+        }
+        for r in rows
+    ]

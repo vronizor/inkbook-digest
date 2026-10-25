@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -8,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import library, store
+from digest import library, sharing, store
 from digest.reader import Reader, word_count as reader_word_count
 
 log = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ WB_MIN = 500
 WB_MAX = 50000
 INTERVAL_MIN = 1
 INTERVAL_MAX = 99
+DELIVERY_LIMIT = 20
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 _queue_cache: dict = {"data": None, "expires": 0.0, "error": None}
 
@@ -183,6 +186,11 @@ def dashboard(request: Request):
         queue_stats, queue_error = _get_queue_stats(cfg, conn)
         chart = _chart_data(conn)
         books = library.list_books(conn)
+        subscribers = store.list_subscribers(conn)
+        last_delivery = store.last_delivery_by_email(conn)
+        for sub in subscribers:
+            sub["last"] = last_delivery.get(sub["email"])
+        deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
     finally:
         conn.close()
 
@@ -216,6 +224,13 @@ def dashboard(request: Request):
             "opds_url": _opds_url(cfg, request),
             "upload_flashes": upload_flashes,
             "delete_flash": delete_flash,
+            "subscribers": subscribers,
+            "deliveries": deliveries,
+            "latest_issue": sharing.latest_issue(cfg.data_dir),
+            "share_tag": cfg.share_tag,
+            "subscription_choices": sharing.SUBSCRIPTION_CHOICES,
+            "sub_flash": request.query_params.get("sub"),
+            "sub_flash_detail": request.query_params.get("detail", ""),
         },
     )
 
@@ -368,3 +383,85 @@ def library_delete(book_id: int, request: Request) -> RedirectResponse:
     return RedirectResponse(
         url=f"/?library_delete=ok&name={quote(name, safe='')}", status_code=303
     )
+
+
+def _sub_redirect(flash: str, detail: str = "") -> RedirectResponse:
+    qs = f"sub={flash}" + (f"&detail={quote(detail, safe='')}" if detail else "")
+    return RedirectResponse(url=f"/?{qs}#subscribers", status_code=303)
+
+
+@router.post("/subscribers")
+def subscriber_add(
+    request: Request,
+    email: str = Form(...),
+    name: str = Form(""),
+    version: str = Form("full"),
+) -> RedirectResponse:
+    email = email.strip().lower()
+    if not _EMAIL_RE.match(email) or version not in sharing.SUBSCRIPTION_CHOICES:
+        return _sub_redirect("invalid", email)
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        added = store.add_subscriber(conn, email, name.strip(), version)
+    finally:
+        conn.close()
+    if not added:
+        return _sub_redirect("exists", email)
+    log.info(f"subscriber added: {email} ({version})")
+    return _sub_redirect("added", email)
+
+
+@router.post("/subscribers/{subscriber_id}/toggle")
+def subscriber_toggle(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        store.toggle_subscriber(conn, subscriber_id)
+    finally:
+        conn.close()
+    return RedirectResponse(url="/#subscribers", status_code=303)
+
+
+@router.post("/subscribers/{subscriber_id}/delete")
+def subscriber_delete(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        store.delete_subscriber(conn, subscriber_id)
+    finally:
+        conn.close()
+    if sub:
+        log.info(f"subscriber removed: {sub['email']}")
+    return _sub_redirect("removed", sub["email"] if sub else "")
+
+
+@router.post("/subscribers/{subscriber_id}/send-latest")
+def subscriber_send_latest(subscriber_id: int, request: Request) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    issue = sharing.latest_issue(cfg.data_dir)
+    if not issue:
+        return _sub_redirect("nothing")
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        errors = sharing.deliver(cfg, conn, issue, sub, manual=True)
+    finally:
+        conn.close()
+    if errors:
+        return _sub_redirect("send_failed", "; ".join(errors)[:300])
+    return _sub_redirect("sent", sub["email"])
+
+
+@router.get("/issues/{digest_id}/{fmt}", response_class=HTMLResponse)
+def issue_preview(digest_id: int, fmt: str, request: Request):
+    if fmt not in sharing.FORMATS:
+        return PlainTextResponse("not found", status_code=404)
+    cfg = request.app.state.cfg
+    path = sharing.emails_dir(cfg.data_dir, digest_id) / f"{fmt}.html"
+    if not path.exists():
+        return PlainTextResponse("not found", status_code=404)
+    return HTMLResponse(path.read_text())

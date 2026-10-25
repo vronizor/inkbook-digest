@@ -38,6 +38,16 @@ EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Missing EPUBs for 
 - Books appear in the OPDS `Library` feed, recently-added first.
 - Delete via the dashboard with a confirmation dialog.
 
+### Email subscribers
+
+Friends can get the Morning Paper by email (see [SPEC_V4.md](SPEC_V4.md)).
+
+- Only articles in a digest that also carry `SHARE_TAG` (default `toshare`) are emailed. Empty `SHARE_TAG` shares everything.
+- Each subscriber gets `full` (sanitized full text, images hotlinked), `teaser` (Reader summary or first 60 words + link), or `both` (two emails per issue).
+- Subscribers are managed in the dashboard's **Subscribers** section: add, pause/resume, remove, "Send latest" (resends the last shared issue — handy for testing rendering), and a recent-deliveries log with preview links.
+- `sent` means Proton SMTP accepted the message; bounces arrive in the `SMTP_FROM` mailbox.
+- `--dry-run` renders the emails to `$DATA_DIR/emails/dry-run/{full,teaser}.html` without sending.
+
 ### OPDS
 
 | Path | Returns |

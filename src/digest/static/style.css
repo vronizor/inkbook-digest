@@ -105,3 +105,20 @@ dialog p { margin: 0 0 1em; }
 .dialog-actions { display: flex; gap: 0.5em; justify-content: flex-end; }
 .dialog-actions button { background: #888; }
 .dialog-actions .btn-danger { background: var(--error); }
+
+.status-failed { color: var(--error); }
+form.inline { display: inline; margin: 0; }
+.btn-small { padding: 0.2em 0.7em; font-size: 0.85em; }
+.btn-grey { background: #888; }
+.sub-table tr.inactive td { color: var(--muted); }
+.sub-actions { white-space: nowrap; text-align: right; }
+.sub-add { margin-top: 0.8em; }
+.sub-add input, .sub-add select { font: inherit; padding: 0.3em 0.5em; border: 1px solid var(--border); border-radius: 3px; background: white; }
+.sub-add input[type="email"] { min-width: 16em; }
+.deliveries { margin-top: 1em; }
+.deliveries table { margin-top: 0.5em; font-size: 0.9em; }
+.subscribers code { background: #eee; padding: 0.1em 0.4em; border-radius: 3px; }
+@media (max-width: 640px) {
+  .sub-table th:nth-child(1), .sub-table td:nth-child(1) { display: none; }
+  .sub-add input[type="email"] { min-width: 0; flex: 1; }
+}

@@ -74,6 +74,95 @@
   {% endif %}
 </section>
 
+<section class="subscribers" id="subscribers">
+  <h2>Subscribers</h2>
+  {% if sub_flash == "added" %}<div class="flash flash-info">Added {{ sub_flash_detail }}.</div>
+  {% elif sub_flash == "exists" %}<div class="flash flash-warn">{{ sub_flash_detail }} is already subscribed.</div>
+  {% elif sub_flash == "invalid" %}<div class="flash flash-warn">Invalid subscriber{% if sub_flash_detail %}: {{ sub_flash_detail }}{% endif %}.</div>
+  {% elif sub_flash == "removed" %}<div class="flash flash-info">Removed {{ sub_flash_detail }}.</div>
+  {% elif sub_flash == "sent" %}<div class="flash flash-info">Latest issue sent to {{ sub_flash_detail }}.</div>
+  {% elif sub_flash == "send_failed" %}<div class="flash flash-warn">Send failed: {{ sub_flash_detail }}</div>
+  {% elif sub_flash == "nothing" %}<div class="flash flash-warn">No shared issue yet.</div>
+  {% endif %}
+
+  <p class="hint">
+    {% if latest_issue %}
+      Last shared issue: <span class="ts">{{ latest_issue.date }}</span>{% if latest_issue.volume > 1 %} (Vol. {{ latest_issue.volume }}){% endif %} · {{ latest_issue.articles }} article{{ "s" if latest_issue.articles != 1 }} · preview
+      <a href="/issues/{{ latest_issue.digest_id }}/full" target="_blank">full</a> /
+      <a href="/issues/{{ latest_issue.digest_id }}/teaser" target="_blank">teaser</a>
+    {% else %}
+      Nothing shared yet.
+    {% endif %}
+    · {% if share_tag %}articles also tagged <code>{{ share_tag }}</code> are emailed{% else %}every digest article is emailed{% endif %}
+  </p>
+
+  {% if subscribers %}
+  <table class="sub-table">
+    <thead><tr><th>Name</th><th>Email</th><th>Version</th><th>Last delivery</th><th></th></tr></thead>
+    <tbody>
+    {% for s in subscribers %}
+      <tr class="{{ '' if s.active else 'inactive' }}">
+        <td>{{ s.name or "—" }}</td>
+        <td>{{ s.email }}</td>
+        <td>{{ s.format }}{% if not s.active %} <span class="no-data">(paused)</span>{% endif %}</td>
+        <td>
+          {% if s.last %}
+            <span class="status-{{ s.last.status }}" {% if s.last.error %}title="{{ s.last.error }}"{% endif %}>{{ s.last.status }}</span>
+            <span class="ts">{{ s.last.sent_at[:16]|replace("T", " ") }}</span>
+          {% else %}<span class="no-data">never</span>{% endif %}
+        </td>
+        <td class="sub-actions">
+          <form method="post" action="/subscribers/{{ s.id }}/send-latest" class="inline">
+            <button type="submit" class="btn-small"{% if not latest_issue %} disabled{% endif %} title="Send the latest shared issue now">Send latest</button>
+          </form>
+          <form method="post" action="/subscribers/{{ s.id }}/toggle" class="inline">
+            <button type="submit" class="btn-small btn-grey">{{ "Pause" if s.active else "Resume" }}</button>
+          </form>
+          <form method="post" action="/subscribers/{{ s.id }}/delete" class="inline"
+                onsubmit="return confirm({{ ('Remove ' ~ s.email ~ '?')|tojson }})">
+            <button type="submit" class="book-delete" title="Remove">×</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="no-data">no subscribers yet</p>
+  {% endif %}
+
+  <form method="post" action="/subscribers" class="settings-form sub-add">
+    <input type="text" name="name" placeholder="Name">
+    <input type="email" name="email" placeholder="email@example.com" required>
+    <select name="version">
+      {% for c in subscription_choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+    </select>
+    <button type="submit">Add</button>
+  </form>
+
+  <details class="deliveries">
+    <summary>Recent deliveries ({{ deliveries|length }})</summary>
+    {% if deliveries %}
+    <table>
+      <thead><tr><th>When</th><th>To</th><th>Issue</th><th>Version</th><th>Status</th><th>Size</th></tr></thead>
+      <tbody>
+      {% for d in deliveries %}
+        <tr>
+          <td class="ts">{{ d.sent_at[:16]|replace("T", " ") }}</td>
+          <td>{{ d.email }}</td>
+          <td class="ts">{{ d.issue_date }}{% if d.volume > 1 %} v{{ d.volume }}{% endif %}</td>
+          <td><a href="/issues/{{ d.digest_id }}/{{ d.format }}" target="_blank">{{ d.format }}</a></td>
+          <td class="status-{{ d.status }}">{{ d.status }}{% if d.manual %} <span class="no-data">(manual)</span>{% endif %}{% if d.error %}<br><small class="error">{{ d.error }}</small>{% endif %}</td>
+          <td>{{ d.size_bytes|human_size if d.size_bytes else "—" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="no-data">no deliveries yet</p>{% endif %}
+  </details>
+  <p class="hint">"sent" means Proton SMTP accepted the message. Bounces land in the sender mailbox, not here.</p>
+</section>
+
 <dialog id="delete-dialog">
   <p>Delete <strong id="delete-name"></strong>?</p>
   <div class="dialog-actions">
@@ -245,7 +334,7 @@
   }
 
   setTimeout(() => {
-    document.querySelectorAll('#flashes .flash').forEach(el => {
+    document.querySelectorAll('#flashes .flash, .subscribers .flash').forEach(el => {
       el.style.transition = 'opacity .3s';
       el.style.opacity = '0';
       setTimeout(() => el.remove(), 300);

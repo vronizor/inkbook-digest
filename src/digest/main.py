@@ -14,7 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from digest import config, epub, mailer, store
+from digest import config, epub, mailer, sharing, store
 from digest.reader import Reader, tag_names, word_count as reader_word_count
 
 _PKG_DIR = Path(__file__).parent
@@ -154,6 +154,10 @@ def run_once(
             )
 
             if dry_run:
+                try:
+                    sharing.render_dry_run(cfg, today, volume, articles_only)
+                except Exception as e:
+                    log.exception(f"dry-run sharing render failed: {e}")
                 store.record_run_end(conn, run_id, "ok", log_buf.getvalue())
                 log.info(f"=== dry-run done: {len(selected)} articles, epub at {out_path} ===")
                 log.info("dry-run: skipped Reader tag-add and sent_articles recording")
@@ -175,10 +179,12 @@ def run_once(
                     tag_errors.append(f"{a['id']}: {e}")
                     log.warning(f"failed to add done-tag to {a['id']}: {e}")
 
-            outcome = "ok" if not tag_errors else "error"
+            share_errors = sharing.share_digest(cfg, conn, digest_id, today, volume, articles_only)
+
+            outcome = "ok" if not (tag_errors or share_errors) else "error"
             store.record_run_end(conn, run_id, outcome, log_buf.getvalue())
 
-            if tag_errors:
+            if tag_errors or share_errors:
                 _try_send_alert(cfg, today, log_buf.getvalue(),
                                 f"[inkbook-digest] partial failure on {today.isoformat()}")
             log.info(f"=== digest run done: {len(selected)} articles, {total_words} words, vol {volume} ===")
