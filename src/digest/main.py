@@ -201,6 +201,10 @@ def run_once(
         logging.getLogger().removeHandler(buf_handler)
 
 
+# APScheduler's default grace is 1 s: any stall at fire time silently drops the run.
+MISFIRE_GRACE_SECONDS = 6 * 3600
+
+
 def run_with_lock(cfg: config.Config, *, manual_trigger: bool = False) -> None:
     """Wrapper for scheduler/trigger paths. Skips if another run is in progress."""
     if not is_running.acquire(blocking=False):
@@ -235,7 +239,13 @@ async def lifespan(app: FastAPI):
     finally:
         conn.close()
     scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
-    scheduler.add_job(lambda: run_with_lock(cfg), schedule.trigger(sched, cfg.tz), id=schedule.JOB_ID)
+    scheduler.add_job(
+        lambda: run_with_lock(cfg),
+        schedule.trigger(sched, cfg.tz),
+        id=schedule.JOB_ID,
+        misfire_grace_time=MISFIRE_GRACE_SECONDS,
+        coalesce=True,
+    )
     scheduler.start()
     upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
     log.info(
