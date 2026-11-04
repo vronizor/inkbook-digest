@@ -5,10 +5,11 @@ import random
 import sys
 import threading
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from apscheduler.events import EVENT_JOB_MISSED, JobExecutionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -71,7 +72,11 @@ def _scaffold(cfg: config.Config) -> None:
 
 
 def run_once(
-    cfg: config.Config, *, dry_run: bool = False, manual_trigger: bool = False
+    cfg: config.Config,
+    *,
+    dry_run: bool = False,
+    manual_trigger: bool = False,
+    late_by: timedelta = timedelta(0),
 ) -> int:
     log_buf, buf_handler = _attach_run_buffer()
     today = datetime.now(ZoneInfo(cfg.tz)).date()
@@ -83,6 +88,8 @@ def run_once(
     mode = f" ({', '.join(mode_bits)})" if mode_bits else ""
     log.info(f"=== digest run start: {today.isoformat()}{mode} ===")
     log.info(f"sharing: {sharing.describe_mode(cfg.share_tag)}")
+    if late_by >= LATE_NOTICE:
+        log.warning(f"scheduled run started {schedule.format_delay(late_by)} late")
 
     conn = store.connect(cfg.data_dir)
     store.prune_old_runs(conn)
@@ -203,17 +210,50 @@ def run_once(
 
 # APScheduler's default grace is 1 s: any stall at fire time silently drops the run.
 MISFIRE_GRACE_SECONDS = 6 * 3600
+LATE_NOTICE = timedelta(minutes=1)
 
 
-def run_with_lock(cfg: config.Config, *, manual_trigger: bool = False) -> None:
+def run_with_lock(
+    cfg: config.Config, *, manual_trigger: bool = False, late_by: timedelta = timedelta(0)
+) -> None:
     """Wrapper for scheduler/trigger paths. Skips if another run is in progress."""
     if not is_running.acquire(blocking=False):
         log.warning("run skipped: another digest run is already in progress")
         return
     try:
-        run_once(cfg, manual_trigger=manual_trigger)
+        run_once(cfg, manual_trigger=manual_trigger, late_by=late_by)
     finally:
         is_running.release()
+
+
+def scheduled_run(cfg: config.Config) -> None:
+    conn = store.connect(cfg.data_dir)
+    try:
+        sched = schedule.load(conn)
+    finally:
+        conn.close()
+    run_with_lock(cfg, late_by=schedule.lateness(sched, datetime.now(ZoneInfo(cfg.tz))))
+
+
+def record_missed(cfg: config.Config, event: JobExecutionEvent) -> None:
+    now = datetime.now(ZoneInfo(cfg.tz))
+    conn = store.connect(cfg.data_dir)
+    try:
+        sched = schedule.load(conn)
+        scheduled = event.scheduled_run_time.astimezone(ZoneInfo(cfg.tz))
+        if store.get_setting(conn, "paused") == "true" or not schedule.is_on_week(sched, scheduled.date()):
+            return
+        late = schedule.format_delay(now.astimezone(timezone.utc) - event.scheduled_run_time.astimezone(timezone.utc))
+        msg = (
+            f"scheduled run for {scheduled:%a %d %b %H:%M} skipped: scheduler woke {late} late, "
+            f"beyond the {MISFIRE_GRACE_SECONDS // 3600}h grace period"
+        )
+        log.warning(msg)
+        store.record_missed_run(conn, scheduled, msg)
+    except Exception as e:
+        log.error(f"could not record missed run: {e}")
+    finally:
+        conn.close()
 
 
 def _try_send_alert(cfg: config.Config, today: date, body: str, subject: str) -> None:
@@ -240,12 +280,13 @@ async def lifespan(app: FastAPI):
         conn.close()
     scheduler = BackgroundScheduler(timezone=ZoneInfo(cfg.tz))
     scheduler.add_job(
-        lambda: run_with_lock(cfg),
+        lambda: scheduled_run(cfg),
         schedule.trigger(sched, cfg.tz),
         id=schedule.JOB_ID,
         misfire_grace_time=MISFIRE_GRACE_SECONDS,
         coalesce=True,
     )
+    scheduler.add_listener(lambda event: record_missed(cfg, event), EVENT_JOB_MISSED)
     scheduler.start()
     upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
     log.info(

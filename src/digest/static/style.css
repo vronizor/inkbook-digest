@@ -106,7 +106,7 @@ dialog p { margin: 0 0 1em; }
 .dialog-actions button { background: #888; }
 .dialog-actions .btn-danger { background: var(--error); }
 
-.status-failed { color: var(--error); }
+.status-failed, .status-missed { color: var(--error); }
 form.inline { display: inline; margin: 0; }
 .btn-small { padding: 0.2em 0.7em; font-size: 0.85em; }
 .btn-grey { background: #888; }

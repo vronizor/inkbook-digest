@@ -139,6 +139,12 @@ def record_run_end(conn: sqlite3.Connection, run_id: int, outcome: str, log_text
     )
 
 
+def record_missed_run(conn: sqlite3.Connection, scheduled_at: datetime, log_text: str) -> None:
+    conn.execute(
+        "INSERT INTO runs (started_at, finished_at, outcome, log) VALUES (?, ?, 'missed', ?)",
+        (scheduled_at.astimezone(timezone.utc).isoformat(), _now(), log_text),
+    )
+
 def record_digest(
     conn: sqlite3.Connection,
     article_count: int,
