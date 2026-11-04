@@ -2,7 +2,7 @@ import logging
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.triggers.cron import CronTrigger
@@ -120,6 +120,32 @@ def next_runs(sched: Schedule, now: datetime, count: int = 2) -> list[datetime]:
                 break
     return out
 
+
+def last_fire(sched: Schedule, now: datetime) -> datetime | None:
+    for back in range(2):
+        d = now.date() - timedelta(days=back)
+        if d.weekday() not in sched.days:
+            continue
+        run = datetime.combine(d, time(sched.hour, sched.minute), tzinfo=now.tzinfo)
+        if run <= now:
+            return run
+    return None
+
+
+def lateness(sched: Schedule, now: datetime) -> timedelta:
+    fired = last_fire(sched, now)
+    if fired is None:
+        return timedelta(0)
+    return now.astimezone(timezone.utc) - fired.astimezone(timezone.utc)
+
+
+def format_delay(delta: timedelta) -> str:
+    total = int(delta.total_seconds())
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{seconds:02d}s"
 
 def describe(sched: Schedule) -> str:
     t = sched.time_str
