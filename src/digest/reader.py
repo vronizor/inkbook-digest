@@ -64,15 +64,44 @@ class Reader:
         return results[0] if results else None
 
     def add_tag(self, doc_id: str, current_tag_names: list[str], new_tag: str) -> None:
-        """PATCH replaces the full tag list. Send existing names + new tag."""
-        if new_tag in current_tag_names:
+        self.add_tags(doc_id, current_tag_names, [new_tag])
+
+    def add_tags(
+        self, doc_id: str, current_tag_names: list[str], new_tags: list[str], *, archive: bool = False
+    ) -> None:
+        """PATCH replaces the full tag list, so send existing names + new tags."""
+        names = current_tag_names + [t for t in new_tags if t not in current_tag_names]
+        body: dict[str, object] = {}
+        if names != current_tag_names:
+            body["tags"] = names
+        if archive:
+            body["location"] = "archive"
+        if not body:
             return
-        names = current_tag_names + [new_tag]
-        r = self._client.patch(f"{BASE}/update/{doc_id}/", json={"tags": names})
-        if r.status_code not in (200, 204):
-            raise RuntimeError(
-                f"PATCH /update/{doc_id}/ failed: {r.status_code} {r.text[:200]}"
-            )
+        r = self._client.patch(f"{BASE}/update/{doc_id}/", json=body)
+        r.raise_for_status()
+
+    def list_documents(self, *, category: str, updated_after: str) -> Iterator[dict]:
+        cursor: str | None = None
+        while True:
+            params: dict[str, str] = {"category": category, "updatedAfter": updated_after}
+            if cursor:
+                params["pageCursor"] = cursor
+            r = self._client.get(f"{BASE}/list/", params=params)
+            r.raise_for_status()
+            data = r.json()
+            yield from data.get("results", [])
+            cursor = data.get("nextPageCursor")
+            if not cursor:
+                break
+
+    def save_url(self, url: str, tags: list[str], *, saved_using: str) -> tuple[str, bool]:
+        """Returns (document id, created). Reader answers 200 instead of 201 for URLs it already has."""
+        r = self._client.post(
+            f"{BASE}/save/", json={"url": url, "tags": tags, "saved_using": saved_using}
+        )
+        r.raise_for_status()
+        return r.json()["id"], r.status_code == 201
 
 
 def _has_tag(item: dict, tag: str) -> bool:

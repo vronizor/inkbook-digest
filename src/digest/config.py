@@ -48,6 +48,10 @@ class Config:
     share_sender_name: str = "Morning Paper"
     share_reply_to: str = ""
 
+    intake_senders: tuple[tuple[str, str], ...] = ()
+    intake_ignore_domains: tuple[str, ...] = ()
+    intake_interval_minutes: int = 60
+
 
 def _parse_catalogs(raw: str) -> tuple[tuple[str, str], ...]:
     catalogs = []
@@ -57,6 +61,20 @@ def _parse_catalogs(raw: str) -> tuple[tuple[str, str], ...]:
             raise ValueError(f"EXTRA_CATALOGS entry must be 'Title|https://…', got {item!r}")
         catalogs.append((title.strip(), url.strip()))
     return tuple(catalogs)
+
+
+def _parse_senders(raw: str) -> tuple[tuple[str, str], ...]:
+    senders = []
+    for item in filter(None, (part.strip() for part in raw.split(";"))):
+        key, sep, tag = item.partition("|")
+        if not sep or not key.strip() or not tag.strip():
+            raise ValueError(f"INTAKE_SENDERS entry must be 'address|tag', got {item!r}")
+        senders.append((key.strip().lower(), tag.strip()))
+    return tuple(senders)
+
+
+def _parse_domains(raw: str) -> tuple[str, ...]:
+    return tuple(d.strip().lower().lstrip(".") for d in raw.split(",") if d.strip())
 
 
 def load(*, require_smtp: bool = True) -> Config:
@@ -94,6 +112,11 @@ def load(*, require_smtp: bool = True) -> Config:
             share_tag=os.environ.get("SHARE_TAG", "toshare").strip(),
             share_sender_name=os.environ.get("SHARE_SENDER_NAME", "Morning Paper").strip(),
             share_reply_to=os.environ.get("SHARE_REPLY_TO", "").strip(),
+            intake_senders=_parse_senders(os.environ.get("INTAKE_SENDERS", "")),
+            intake_ignore_domains=_parse_domains(
+                os.environ.get("INTAKE_IGNORE_DOMAINS", "proton.me,protonmail.com,pm.me,readwise.io")
+            ),
+            intake_interval_minutes=int(os.environ.get("INTAKE_INTERVAL_MINUTES", "60")),
         )
     except ValueError as e:
         print(f"FATAL: invalid env var value: {e}", file=sys.stderr)
