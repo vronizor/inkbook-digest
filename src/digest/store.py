@@ -72,6 +72,26 @@ CREATE TABLE IF NOT EXISTS deliveries (
   manual INTEGER NOT NULL DEFAULT 0,
   sent_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS intake_emails (
+  reader_document_id TEXT PRIMARY KEY,
+  sender_tag TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  link_count INTEGER NOT NULL DEFAULT 0,
+  processed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS intake_links (
+  id INTEGER PRIMARY KEY,
+  email_document_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  sender_tag TEXT NOT NULL,
+  reader_document_id TEXT,
+  status TEXT NOT NULL,
+  error TEXT,
+  saved_at TEXT NOT NULL,
+  UNIQUE (email_document_id, url)
+);
 """
 
 ADDITIVE_ALTERS = (
@@ -351,5 +371,56 @@ def recent_deliveries(conn: sqlite3.Connection, limit: int = 20) -> list[dict]:
             "size_bytes": r[5], "error": r[6], "manual": bool(r[7]), "sent_at": r[8],
             "issue_date": (r[9] or "")[:10], "volume": r[10] or 1,
         }
+        for r in rows
+    ]
+
+
+def intake_processed_ids(conn: sqlite3.Connection) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT reader_document_id FROM intake_emails")}
+
+
+def intake_handled_urls(conn: sqlite3.Connection, email_document_id: str) -> set[str]:
+    rows = conn.execute(
+        "SELECT url FROM intake_links WHERE email_document_id = ?", (email_document_id,)
+    )
+    return {r[0] for r in rows}
+
+
+def record_intake_link(
+    conn: sqlite3.Connection,
+    email_document_id: str,
+    url: str,
+    sender_tag: str,
+    status: str,
+    *,
+    reader_document_id: str | None = None,
+    error: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO intake_links "
+        "(email_document_id, url, sender_tag, reader_document_id, status, error, saved_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (email_document_id, url, sender_tag, reader_document_id, status, error, _now()),
+    )
+
+
+def record_intake_email(
+    conn: sqlite3.Connection, reader_document_id: str, sender_tag: str, kind: str, link_count: int
+) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO intake_emails "
+        "(reader_document_id, sender_tag, kind, link_count, processed_at) VALUES (?, ?, ?, ?, ?)",
+        (reader_document_id, sender_tag, kind, link_count, _now()),
+    )
+
+
+def recent_intake_links(conn: sqlite3.Connection, limit: int = 30) -> list[dict]:
+    rows = conn.execute(
+        "SELECT url, sender_tag, status, error, saved_at FROM intake_links "
+        "ORDER BY id DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {"url": r[0], "sender_tag": r[1], "status": r[2], "error": r[3], "saved_at": r[4]}
         for r in rows
     ]

@@ -11,10 +11,11 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_MISSED, JobExecutionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from digest import config, epub, mailer, schedule, sharing, store
+from digest import config, epub, intake, mailer, schedule, sharing, store
 from digest.reader import Reader, tag_names, word_count as reader_word_count
 
 _PKG_DIR = Path(__file__).parent
@@ -287,7 +288,20 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
     scheduler.add_listener(lambda event: record_missed(cfg, event), EVENT_JOB_MISSED)
+    if cfg.intake_senders:
+        scheduler.add_job(
+            lambda: intake.run_with_lock(cfg),
+            IntervalTrigger(minutes=cfg.intake_interval_minutes),
+            id=intake.JOB_ID,
+            coalesce=True,
+            max_instances=1,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1),
+        )
     scheduler.start()
+    log.info(
+        f"intake: every {cfg.intake_interval_minutes} min for {len(cfg.intake_senders)} sender(s)"
+        if cfg.intake_senders else "intake: disabled (INTAKE_SENDERS empty)"
+    )
     upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
     log.info(
         f"scheduler started: {schedule.describe(sched)} ({cfg.tz}), "

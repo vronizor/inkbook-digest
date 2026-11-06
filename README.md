@@ -9,7 +9,7 @@ Both are exposed as **OPDS catalogs** so KOReader on the Inkbook (or any OPDS-aw
 
 A status dashboard at `http://<pi>:8080/` shows queue stats, history, runs, a 30-day chart, the library list, an upload form, and the OPDS feed URL. Trigger button for on-demand digest runs, Pause toggle blocks scheduled runs.
 
-See [SPEC.md](SPEC.md), [SPEC_V2.md](SPEC_V2.md), and [SPEC_V3.md](SPEC_V3.md) for the full design.
+See [SPEC.md](SPEC.md) through [SPEC_V6.md](SPEC_V6.md) for the full design.
 
 ## What it does
 
@@ -47,6 +47,10 @@ Friends can get the Morning Paper by email (see [SPEC_V4.md](SPEC_V4.md)).
 - Subscribers are managed in the dashboard's **Subscribers** section: add, pause/resume, remove, "Send latest" (resends the last shared issue — handy for testing rendering), and a recent-deliveries log with preview links.
 - `sent` means Proton SMTP accepted the message; bounces arrive in the `SMTP_FROM` mailbox.
 - `--dry-run` renders the emails to `$DATA_DIR/emails/dry-run/{full,teaser}.html` without sending.
+
+### Links from friends
+
+Friends email links to your Reader library address; Reader only stores those as one-word emails. The intake job (hourly, or **Check now** on the dashboard) saves each link as a real article tagged with the sender's tag plus `toepub`, and archives the email. Forwarded newsletters are only tagged. Configure senders with `INTAKE_SENDERS=address|tag;…`. See [SPEC_V6.md](SPEC_V6.md).
 
 ### OPDS
 

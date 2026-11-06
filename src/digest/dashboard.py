@@ -11,7 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import library, schedule, sharing, store
+from digest import intake, library, schedule, sharing, store
 from digest.reader import Reader, word_count as reader_word_count
 
 log = logging.getLogger(__name__)
@@ -209,6 +209,7 @@ def dashboard(request: Request):
         for sub in subscribers:
             sub["last"] = last_delivery.get(sub["email"])
         deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
+        intake_links = store.recent_intake_links(conn, TABLE_LIMIT)
     finally:
         conn.close()
 
@@ -253,6 +254,9 @@ def dashboard(request: Request):
             "subscription_choices": sharing.SUBSCRIPTION_CHOICES,
             "sub_flash": request.query_params.get("sub"),
             "sub_flash_detail": request.query_params.get("detail", ""),
+            "intake_enabled": bool(cfg.intake_senders),
+            "intake_links": intake_links,
+            "intake_flash": request.query_params.get("intake"),
         },
     )
 
@@ -297,6 +301,14 @@ def trigger(bg: BackgroundTasks, request: Request) -> RedirectResponse:
     run_with_lock = request.app.state.run_with_lock
     bg.add_task(run_with_lock, cfg, manual_trigger=True)
     return RedirectResponse(url="/?triggered=ok", status_code=303)
+
+
+@router.post("/intake/run")
+def intake_run(bg: BackgroundTasks, request: Request) -> RedirectResponse:
+    if intake.is_running.locked():
+        return RedirectResponse(url="/?intake=already_running#intake", status_code=303)
+    bg.add_task(intake.run_with_lock, request.app.state.cfg)
+    return RedirectResponse(url="/?intake=ok#intake", status_code=303)
 
 
 @router.post("/pause")
