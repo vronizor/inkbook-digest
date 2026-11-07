@@ -283,6 +283,31 @@
   {% else %}<p class="no-data">no data yet</p>{% endif %}
 </section>
 
+{% if intake_enabled %}
+<section id="intake">
+  <h2>Links from friends</h2>
+  {% if intake_flash == "ok" %}<div class="flash flash-info">Checking Reader for new link emails — refresh in a minute.</div>
+  {% elif intake_flash == "already_running" %}<div class="flash flash-warn">A check is already in progress.</div>{% endif %}
+  <form method="post" action="/intake/run" class="inline"><button type="submit">Check now</button></form>
+  {% if intake_links %}
+  <table>
+    <thead><tr><th>Link</th><th>From</th><th>Status</th><th>Saved</th></tr></thead>
+    <tbody>
+    {% for l in intake_links %}
+      <tr{% if loop.index > 5 %} class="more" hidden{% endif %}>
+        <td><a href="{{ l.url }}">{{ l.url|domain }}</a></td>
+        <td>{{ l.sender_tag }}</td>
+        <td{% if l.error %} title="{{ l.error }}"{% endif %}>{{ l.status }}</td>
+        <td class="ts">{{ l.saved_at|when }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if intake_links|length > 5 %}<button type="button" class="show-more" onclick="toggleMore(this)" data-more="Show {{ intake_links|length - 5 }} more">Show {{ intake_links|length - 5 }} more</button>{% endif %}
+  {% else %}<p class="no-data">no links yet</p>{% endif %}
+</section>
+{% endif %}
+
 <section class="settings" id="settings">
   <h2>Settings</h2>
   {% if settings_flash == "ok" %}<div class="flash flash-info">Settings saved.</div>
