@@ -24,10 +24,10 @@ from digest.reader import Reader, tag_names
 log = logging.getLogger(__name__)
 
 JOB_ID = "intake"
-CURSOR_KEY = "intake_cursor"
 SAVED_USING = "kiosk-intake"
-FIRST_RUN_LOOKBACK = timedelta(days=3)
-CURSOR_OVERLAP = timedelta(minutes=10)
+# A fixed window rather than a stored cursor: sender config changes and outages up to
+# this long are picked up on the next run, and intake_emails makes re-listing harmless.
+LOOKBACK = timedelta(days=7)
 MAX_PROSE_WORDS = 40
 MAX_LINKS = 10
 
@@ -43,16 +43,9 @@ class TransientError(Exception):
 
 
 def match_sender(doc: dict, senders: tuple[tuple[str, str], ...]) -> str | None:
-    """Matches against every metadata string field, since which one carries the sender
-    address on email documents isn't documented. A key can also be a display name."""
-    haystack = " ".join(
-        v.lower() for k, v in doc.items() if isinstance(v, str) and k not in _CONTENT_FIELDS
-    )
+    """The API exposes no sender address on email documents, only the display name in `author`."""
     author = (doc.get("author") or "").strip().lower()
-    for key, tag in senders:
-        if key == author or ("@" in key and key in haystack):
-            return tag
-    return None
+    return next((tag for name, tag in senders if name == author), None)
 
 
 def extract_links(body_html: str, ignore_domains: tuple[str, ...]) -> list[str]:
@@ -138,15 +131,14 @@ def run(cfg: config.Config) -> int:
     if not cfg.intake_senders:
         log.info("intake: no INTAKE_SENDERS configured, nothing to do")
         return 0
-    started = datetime.now(timezone.utc)
     conn = store.connect(cfg.data_dir)
     reader = Reader(cfg.reader_token)
     try:
-        cursor = store.get_setting(conn, CURSOR_KEY) or (started - FIRST_RUN_LOOKBACK).isoformat()
+        since = (datetime.now(timezone.utc) - LOOKBACK).isoformat()
         done = store.intake_processed_ids(conn)
         processed = 0
         try:
-            for doc in reader.list_documents(category="email", updated_after=cursor):
+            for doc in reader.list_documents(category="email", updated_after=since):
                 if doc["id"] in done:
                     continue
                 sender_tag = match_sender(doc, cfg.intake_senders)
@@ -165,7 +157,6 @@ def run(cfg: config.Config) -> int:
                 raise
             log.warning(f"intake: stopping early, will retry next run: {e}")
             return 1
-        store.set_setting(conn, CURSOR_KEY, (started - CURSOR_OVERLAP).isoformat())
         if processed:
             log.info(f"intake: processed {processed} email(s)")
         return 0

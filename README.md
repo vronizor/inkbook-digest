@@ -50,7 +50,7 @@ Friends can get the Morning Paper by email (see [SPEC_V4.md](SPEC_V4.md)).
 
 ### Links from friends
 
-Friends email links to your Reader library address; Reader only stores those as one-word emails. The intake job (hourly, or **Check now** on the dashboard) saves each link as a real article tagged with the sender's tag plus `toepub`, and archives the email. Forwarded newsletters are only tagged. Configure senders with `INTAKE_SENDERS=address|tag;…`. See [SPEC_V6.md](SPEC_V6.md).
+Friends email links to your Reader library address; Reader only stores those as one-word emails. The intake job (hourly, or **Check now** on the dashboard) saves each link as a real article tagged with the sender's tag plus `toepub`, and archives the email. Forwarded newsletters are only tagged. Configure senders by display name with `INTAKE_SENDERS=Display Name|tag;…` (Reader's API doesn't expose sender addresses; find a name with `python -m digest.intake --inspect 3` inside the container). See [SPEC_V6.md](SPEC_V6.md).
 
 ### OPDS
 

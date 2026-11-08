@@ -4,11 +4,13 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 
 from digest import config, intake, store
 
-FRIEND = "paul@example.org"
+FRIEND = "Paul Pagel"
 IGNORE = ("proton.me", "protonmail.com", "pm.me", "readwise.io")
 
 
@@ -35,7 +37,9 @@ class FakeReader:
         self.patches: list[tuple[str, list[str], bool]] = []
 
     def list_documents(self, *, category: str, updated_after: str):
-        yield from ({k: v for k, v in e.items() if k != "html_content"} for e in self.emails.values())
+        for e in self.emails.values():
+            if e["updated_at"] > updated_after:
+                yield {k: v for k, v in e.items() if k != "html_content"}
 
     def get_document(self, doc_id: str) -> dict | None:
         return self.emails.get(doc_id, {"id": doc_id, "tags": {"old": {}}})
@@ -53,8 +57,12 @@ class FakeReader:
         pass
 
 
-def _email(i: int, body: str, sender: str = FRIEND, author: str = "Paul") -> dict:
-    return {"id": f"em{i}", "author": author, "source_url": f"mailto:{sender}", "tags": {}, "html_content": body}
+def _email(i: int, body: str, author: str = FRIEND, age: timedelta = timedelta(days=2)) -> dict:
+    return {
+        "id": f"em{i}", "author": author, "tags": {}, "html_content": body,
+        "updated_at": (datetime.now(timezone.utc) - age).isoformat(),
+        "source_url": "mailto:reader-forwarded-email/935f98597a2f24f9a9aec707ad524329",
+    }
 
 
 class ParsingTest(unittest.TestCase):
@@ -72,15 +80,15 @@ class ParsingTest(unittest.TestCase):
     def test_prose_words_ignores_urls_and_markup(self):
         self.assertEqual(intake.prose_words('<p>read this https://x.com/a <b>now</b></p>'), 3)
 
-    def test_matches_address_in_any_metadata_field_or_display_name(self):
-        senders = (("paul@example.org", "from-paul"), ("vincent thorne", "from-me"))
-        self.assertEqual(intake.match_sender({"source_url": "mailto:Paul@Example.org"}, senders), "from-paul")
-        self.assertEqual(intake.match_sender({"author": "Vincent Thorne"}, senders), "from-me")
-        self.assertIsNone(intake.match_sender({"author": "Stranger", "summary": FRIEND}, senders))
+    def test_matches_display_name_case_insensitively(self):
+        senders = config._parse_senders("Paul Pagel|from-paul; Vincent Thorne|from-me")
+        self.assertEqual(intake.match_sender({"author": " vincent thorne "}, senders), "from-me")
+        self.assertIsNone(intake.match_sender({"author": "Paul"}, senders))
+        self.assertIsNone(intake.match_sender({"author": None}, senders))
 
     def test_bad_sender_config_fails(self):
         with self.assertRaises(ValueError):
-            config._parse_senders("paul@example.org")
+            config._parse_senders("Paul Pagel")
 
 
 class RunTest(unittest.TestCase):
@@ -111,7 +119,7 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(fake.saved), 1)
 
     def test_ignores_unknown_senders(self):
-        fake = FakeReader([_email(1, "<p>https://a.com/1</p>", sender="news@letter.com", author="Letter")])
+        fake = FakeReader([_email(1, "<p>https://a.com/1</p>", author="Some Newsletter")])
         self._run(fake)
         self.assertEqual(fake.saved, [])
 
@@ -135,6 +143,17 @@ class RunTest(unittest.TestCase):
         statuses = {l["url"]: l["status"] for l in store.recent_intake_links(conn)}
         conn.close()
         self.assertEqual(statuses, {"https://bad.com/x": "error", "https://a.com/1": "saved"})
+
+    def test_email_older_than_previous_run_is_still_picked_up(self):
+        self._run(FakeReader([]))
+        fake = FakeReader([_email(1, "<p>https://a.com/1</p>")])
+        self._run(fake)
+        self.assertEqual([u for u, _ in fake.saved], ["https://a.com/1"])
+
+    def test_ignores_emails_outside_lookback(self):
+        fake = FakeReader([_email(1, "<p>https://a.com/1</p>", age=timedelta(days=30))])
+        self._run(fake)
+        self.assertEqual(fake.saved, [])
 
     def test_transient_error_leaves_email_for_next_run(self):
         fake = FakeReader([_email(1, "<p>https://a.com/1 https://b.com/2</p>")], fail={"https://b.com/2": 503})
