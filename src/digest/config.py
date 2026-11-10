@@ -66,10 +66,10 @@ def _parse_catalogs(raw: str) -> tuple[tuple[str, str], ...]:
 def _parse_senders(raw: str) -> tuple[tuple[str, str], ...]:
     senders = []
     for item in filter(None, (part.strip() for part in raw.split(";"))):
-        key, sep, tag = item.partition("|")
-        if not sep or not key.strip() or not tag.strip():
-            raise ValueError(f"INTAKE_SENDERS entry must be 'address|tag', got {item!r}")
-        senders.append((key.strip().lower(), tag.strip()))
+        name, sep, tag = item.partition("|")
+        if not sep or not name.strip() or not tag.strip():
+            raise ValueError(f"INTAKE_SENDERS entry must be 'Display Name|tag', got {item!r}")
+        senders.append((name.strip().lower(), tag.strip()))
     return tuple(senders)
 
 

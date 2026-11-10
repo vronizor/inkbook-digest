@@ -1,7 +1,7 @@
 """Turns link emails sent to the Reader library address into real Reader articles.
 
-Reader stores an emailed link as a one-word `email` document. For each email from a
-subscriber (or an INTAKE_SENDERS entry), this saves every link as an article tagged with
+Reader stores an emailed link as a one-word `email` document. For each email whose author
+matches a subscriber's sender name (or an INTAKE_SENDERS entry), this saves every link as an article tagged with
 the sender's tag, plus the Morning Paper trigger tag when the sender feeds the pool, then
 archives the original. Longer emails (forwarded newsletters) are only tagged and left in
 place. See SPEC_V6.md and SPEC_V7.md.
@@ -26,10 +26,10 @@ from digest.reader import Reader, tag_names
 log = logging.getLogger(__name__)
 
 JOB_ID = "intake"
-CURSOR_KEY = "intake_cursor"
 SAVED_USING = "kiosk-intake"
-FIRST_RUN_LOOKBACK = timedelta(days=3)
-CURSOR_OVERLAP = timedelta(minutes=10)
+# A fixed window rather than a stored cursor: sender config changes and outages up to
+# this long are picked up on the next run, and intake_emails makes re-listing harmless.
+LOOKBACK = timedelta(days=7)
 MAX_PROSE_WORDS = 40
 MAX_LINKS = 10
 
@@ -60,32 +60,22 @@ def subscriber_tag(sub: dict) -> str:
 
 
 def senders(cfg: config.Config, conn) -> tuple[Sender, ...]:
-    """Each subscriber matches on its Reader display name and on its address.
-    INTAKE_SENDERS only adds keys no subscriber already covers, and always feeds the
-    pool (its pre-dashboard behaviour)."""
-    from_subs: list[Sender] = []
-    for sub in store.list_subscribers(conn):
-        tag = subscriber_tag(sub)
-        display = (sub["sender_name"] or "").strip().lower()
-        if display:
-            from_subs.append((display, tag, sub["to_pool"]))
-        from_subs.append((sub["email"].lower(), tag, sub["to_pool"]))
-    known = {key for key, _, _ in from_subs}
-    from_env = [(key, tag, True) for key, tag in cfg.intake_senders if key not in known]
+    """Subscribers with a sender name, then INTAKE_SENDERS entries no subscriber covers;
+    those always feed the pool (their pre-dashboard behaviour)."""
+    from_subs = [
+        (sub["sender_name"].strip().lower(), subscriber_tag(sub), sub["to_pool"])
+        for sub in store.list_subscribers(conn)
+        if (sub["sender_name"] or "").strip()
+    ]
+    known = {name for name, _, _ in from_subs}
+    from_env = [(name, tag, True) for name, tag in cfg.intake_senders if name not in known]
     return tuple(from_subs + from_env)
 
 
 def match_sender(doc: dict, senders: tuple[Sender, ...]) -> tuple[str, bool] | None:
-    """Matches against every metadata string field, since which one carries the sender
-    address on email documents isn't documented. A key can also be a display name."""
-    haystack = " ".join(
-        v.lower() for k, v in doc.items() if isinstance(v, str) and k not in _CONTENT_FIELDS
-    )
+    """The API exposes no sender address on email documents, only the display name in `author`."""
     author = (doc.get("author") or "").strip().lower()
-    for key, tag, to_pool in senders:
-        if key == author or ("@" in key and key in haystack):
-            return tag, to_pool
-    return None
+    return next(((tag, to_pool) for name, tag, to_pool in senders if name == author), None)
 
 
 def extract_links(body_html: str, ignore_domains: tuple[str, ...]) -> list[str]:
@@ -170,20 +160,19 @@ def process_email(
 
 
 def run(cfg: config.Config) -> int:
-    started = datetime.now(timezone.utc)
     conn = store.connect(cfg.data_dir)
     known = senders(cfg, conn)
     if not known:
         conn.close()
-        log.info("intake: no subscribers or INTAKE_SENDERS, nothing to do")
+        log.info("intake: no subscriber sender names or INTAKE_SENDERS, nothing to do")
         return 0
     reader = Reader(cfg.reader_token)
     try:
-        cursor = store.get_setting(conn, CURSOR_KEY) or (started - FIRST_RUN_LOOKBACK).isoformat()
+        since = (datetime.now(timezone.utc) - LOOKBACK).isoformat()
         done = store.intake_processed_ids(conn)
         processed = 0
         try:
-            for doc in reader.list_documents(category="email", updated_after=cursor):
+            for doc in reader.list_documents(category="email", updated_after=since):
                 if doc["id"] in done:
                     continue
                 match = match_sender(doc, known)
@@ -203,7 +192,6 @@ def run(cfg: config.Config) -> int:
                 raise
             log.warning(f"intake: stopping early, will retry next run: {e}")
             return 1
-        store.set_setting(conn, CURSOR_KEY, (started - CURSOR_OVERLAP).isoformat())
         if processed:
             log.info(f"intake: processed {processed} email(s)")
         return 0

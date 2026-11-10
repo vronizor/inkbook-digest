@@ -507,7 +507,7 @@ def subscriber_sender(subscriber_id: int, request: Request, sender_name: str = F
         conn.close()
     log.info(f"subscriber {sub['email']} sender name: {sub['sender_name']!r} -> {sender_name.strip()!r}")
     return _sub_redirect("sender", f"{sub['email']} matched as \"{sender_name.strip()}\"" if sender_name.strip()
-                         else f"{sub['email']} matched by address only")
+                         else f"{sub['email']} has no sender name, their link emails are ignored")
 
 
 @router.post("/subscribers/{subscriber_id}/pool")
