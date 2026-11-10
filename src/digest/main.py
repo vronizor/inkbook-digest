@@ -288,19 +288,18 @@ async def lifespan(app: FastAPI):
         coalesce=True,
     )
     scheduler.add_listener(lambda event: record_missed(cfg, event), EVENT_JOB_MISSED)
-    if cfg.intake_senders:
-        scheduler.add_job(
-            lambda: intake.run_with_lock(cfg),
-            IntervalTrigger(minutes=cfg.intake_interval_minutes),
-            id=intake.JOB_ID,
-            coalesce=True,
-            max_instances=1,
-            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1),
-        )
+    scheduler.add_job(
+        lambda: intake.run_with_lock(cfg),
+        IntervalTrigger(minutes=cfg.intake_interval_minutes),
+        id=intake.JOB_ID,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
     scheduler.start()
     log.info(
-        f"intake: every {cfg.intake_interval_minutes} min for {len(cfg.intake_senders)} sender(s)"
-        if cfg.intake_senders else "intake: disabled (INTAKE_SENDERS empty)"
+        f"intake: every {cfg.intake_interval_minutes} min for subscribers"
+        f" + {len(cfg.intake_senders)} INTAKE_SENDERS entr{'y' if len(cfg.intake_senders) == 1 else 'ies'}"
     )
     upcoming = schedule.next_runs(sched, datetime.now(ZoneInfo(cfg.tz)), 1)
     log.info(

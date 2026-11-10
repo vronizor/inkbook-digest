@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS subscribers (
   name TEXT,
   format TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  to_pool INTEGER NOT NULL DEFAULT 0,
+  sender_name TEXT,
   added_at TEXT NOT NULL
 );
 
@@ -98,6 +100,8 @@ ADDITIVE_ALTERS = (
     "ALTER TABLE digests ADD COLUMN volume INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE digests ADD COLUMN total_words INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE sent_articles ADD COLUMN word_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE subscribers ADD COLUMN to_pool INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE subscribers ADD COLUMN sender_name TEXT",
 )
 
 
@@ -292,32 +296,51 @@ def get_today_volume_number(conn: sqlite3.Connection) -> int:
     return (row[0] or 0) + 1
 
 
+_SUBSCRIBER_COLS = "id, email, name, format, active, to_pool, sender_name, added_at"
+
+
+def _subscriber(r: tuple) -> dict:
+    return {
+        "id": r[0], "email": r[1], "name": r[2], "format": r[3],
+        "active": bool(r[4]), "to_pool": bool(r[5]), "sender_name": r[6], "added_at": r[7],
+    }
+
+
 def list_subscribers(conn: sqlite3.Connection, *, active_only: bool = False) -> list[dict]:
-    sql = "SELECT id, email, name, format, active, added_at FROM subscribers"
+    sql = f"SELECT {_SUBSCRIBER_COLS} FROM subscribers"
     if active_only:
         sql += " WHERE active = 1"
     sql += " ORDER BY added_at"
-    return [
-        {"id": r[0], "email": r[1], "name": r[2], "format": r[3], "active": bool(r[4]), "added_at": r[5]}
-        for r in conn.execute(sql)
-    ]
+    return [_subscriber(r) for r in conn.execute(sql)]
 
 
 def get_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, email, name, format, active FROM subscribers WHERE id = ?", (subscriber_id,)
+        f"SELECT {_SUBSCRIBER_COLS} FROM subscribers WHERE id = ?", (subscriber_id,)
     ).fetchone()
-    if not row:
-        return None
-    return {"id": row[0], "email": row[1], "name": row[2], "format": row[3], "active": bool(row[4])}
+    return _subscriber(row) if row else None
 
 
-def add_subscriber(conn: sqlite3.Connection, email: str, name: str, fmt: str) -> bool:
+def add_subscriber(
+    conn: sqlite3.Connection, email: str, name: str, fmt: str,
+    to_pool: bool = False, sender_name: str = "",
+) -> bool:
     cur = conn.execute(
-        "INSERT OR IGNORE INTO subscribers (email, name, format, added_at) VALUES (?, ?, ?, ?)",
-        (email, name or None, fmt, _now()),
+        "INSERT OR IGNORE INTO subscribers (email, name, format, to_pool, sender_name, added_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (email, name or None, fmt, int(to_pool), sender_name or None, _now()),
     )
     return cur.rowcount == 1
+
+
+def set_subscriber_sender_name(conn: sqlite3.Connection, subscriber_id: int, sender_name: str) -> None:
+    conn.execute(
+        "UPDATE subscribers SET sender_name = ? WHERE id = ?", (sender_name or None, subscriber_id)
+    )
+
+
+def set_subscriber_pool(conn: sqlite3.Connection, subscriber_id: int, to_pool: bool) -> None:
+    conn.execute("UPDATE subscribers SET to_pool = ? WHERE id = ?", (int(to_pool), subscriber_id))
 
 
 def toggle_subscriber(conn: sqlite3.Connection, subscriber_id: int) -> None:

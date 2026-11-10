@@ -73,10 +73,20 @@ class ParsingTest(unittest.TestCase):
         self.assertEqual(intake.prose_words('<p>read this https://x.com/a <b>now</b></p>'), 3)
 
     def test_matches_address_in_any_metadata_field_or_display_name(self):
-        senders = (("paul@example.org", "from-paul"), ("vincent thorne", "from-me"))
-        self.assertEqual(intake.match_sender({"source_url": "mailto:Paul@Example.org"}, senders), "from-paul")
-        self.assertEqual(intake.match_sender({"author": "Vincent Thorne"}, senders), "from-me")
+        senders = (("paul@example.org", "from-paul", True), ("vincent thorne", "from-me", False))
+        self.assertEqual(
+            intake.match_sender({"source_url": "mailto:Paul@Example.org"}, senders), ("from-paul", True)
+        )
+        self.assertEqual(intake.match_sender({"author": "Vincent Thorne"}, senders), ("from-me", False))
         self.assertIsNone(intake.match_sender({"author": "Stranger", "summary": FRIEND}, senders))
+
+    def test_subscriber_tag_is_normalized_first_name_with_fallbacks(self):
+        tag = intake.subscriber_tag
+        self.assertEqual(tag({"name": "Jeff Pagel", "sender_name": None, "email": "j@x.org"}), "jeff")
+        self.assertEqual(tag({"name": "Éléonore", "sender_name": None, "email": "e@x.org"}), "eleonore")
+        self.assertEqual(tag({"name": "Jean-Marc", "sender_name": None, "email": "j@x.org"}), "jean-marc")
+        self.assertEqual(tag({"name": None, "sender_name": "Eero M.", "email": "e@x.org"}), "eero")
+        self.assertEqual(tag({"name": "", "sender_name": "", "email": "pagel.jm2@x.org"}), "pageljm2")
 
     def test_bad_sender_config_fails(self):
         with self.assertRaises(ValueError):
@@ -144,6 +154,48 @@ class RunTest(unittest.TestCase):
         self.assertEqual(self._run(fake), 0)
         self.assertEqual([u for u, _ in fake.saved], ["https://a.com/1", "https://b.com/2"])
         self.assertEqual(fake.patches, [("em1", ["from-paul"], True)])
+
+
+class SubscriberSendersTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cfg = _cfg(Path(self.tmp.name))
+        self.conn = store.connect(self.cfg.data_dir)
+
+    def tearDown(self):
+        self.conn.close()
+        self.tmp.cleanup()
+
+    def _run(self, fake: FakeReader) -> int:
+        with mock.patch.object(intake, "Reader", return_value=fake):
+            return intake.run(self.cfg)
+
+    def test_matched_by_display_name_and_pooled(self):
+        store.add_subscriber(self.conn, "jeff@example.org", "Jeff", "both", to_pool=True, sender_name="Jeff Pagel")
+        fake = FakeReader([_email(1, "<p>https://a.com/1</p>", sender="hidden", author="Jeff Pagel")])
+        self._run(fake)
+        self.assertEqual(fake.saved, [("https://a.com/1", ["jeff", "toepub"])])
+        self.assertEqual(fake.patches, [("em1", ["jeff"], True)])
+
+    def test_unpooled_subscriber_links_go_to_library_only(self):
+        store.add_subscriber(self.conn, "eero@example.org", "Eero", "teaser", sender_name="Eero M")
+        fake = FakeReader([_email(1, "<p>https://a.com/1</p>", sender="hidden", author="Eero M")])
+        self._run(fake)
+        self.assertEqual(fake.saved, [("https://a.com/1", ["eero"])])
+
+    def test_subscriber_overrides_env_entry_for_same_address(self):
+        store.add_subscriber(self.conn, FRIEND, "Paul", "full")
+        found = intake.senders(self.cfg, self.conn)
+        self.assertIn((FRIEND, "paul", False), found)
+        self.assertNotIn((FRIEND, "from-paul", True), found)
+        self.assertIn(("vincent thorne", "from-me", True), found)
+
+    def test_no_senders_skips_reader(self):
+        with mock.patch.dict(os.environ, {"READER_TOKEN": "x", "DATA_DIR": self.tmp.name}, clear=True):
+            cfg = config.load(require_smtp=False)
+        with mock.patch.object(intake, "Reader") as reader:
+            self.assertEqual(intake.run(cfg), 0)
+        reader.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -79,7 +79,7 @@
   {% if sub_flash == "added" %}<div class="flash flash-info">Added {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "exists" %}<div class="flash flash-warn">{{ sub_flash_detail }} is already subscribed.</div>
   {% elif sub_flash == "invalid" %}<div class="flash flash-warn">Invalid subscriber{% if sub_flash_detail %}: {{ sub_flash_detail }}{% endif %}.</div>
-  {% elif sub_flash == "version" %}<div class="flash flash-info">{{ sub_flash_detail }}.</div>
+  {% elif sub_flash in ("version", "sender", "pool") %}<div class="flash flash-info">{{ sub_flash_detail }}.</div>
   {% elif sub_flash == "removed" %}<div class="flash flash-info">Removed {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "sent" %}<div class="flash flash-info">Latest issue sent to {{ sub_flash_detail }}.</div>
   {% elif sub_flash == "send_failed" %}<div class="flash flash-warn">Send failed: {{ sub_flash_detail }}</div>
@@ -99,7 +99,7 @@
 
   {% if subscribers %}
   <table class="sub-table">
-    <thead><tr><th>Name</th><th>Email</th><th>Version</th><th>Last delivery</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Email</th><th>Version</th><th>Last delivery</th><th title="Links they email to the Reader library address">Links</th><th></th></tr></thead>
     <tbody>
     {% for s in subscribers %}
       <tr class="{{ '' if s.active else 'inactive' }}">
@@ -117,6 +117,18 @@
             <span class="status-{{ s.last.status }}" {% if s.last.error %}title="{{ s.last.error }}"{% endif %}>{{ s.last.status }}</span>
             <span class="ts">{{ s.last.sent_at|when }}</span>
           {% else %}<span class="no-data">never</span>{% endif %}
+        </td>
+        <td class="sub-links">
+          <form method="post" action="/subscribers/{{ s.id }}/sender" class="inline">
+            <input type="text" name="sender_name" value="{{ s.sender_name or '' }}" placeholder="Reader sender name"
+                   class="sender-input" title="Display name Reader shows as the email's author" onchange="this.form.submit()">
+          </form>
+          <form method="post" action="/subscribers/{{ s.id }}/pool" class="inline">
+            <label class="pool-toggle" title="Saved tagged {{ s.tag }}{% if s.to_pool %} + {{ trigger_tag }} (Morning Paper pool){% else %} only (library, not the pool){% endif %}">
+              <input type="checkbox" name="to_pool" value="1"{% if s.to_pool %} checked{% endif %} onchange="this.form.submit()">
+              <code>{{ s.tag }}</code>{% if s.to_pool %} + <code>{{ trigger_tag }}</code>{% endif %}
+            </label>
+          </form>
         </td>
         <td class="sub-actions">
           <form method="post" action="/subscribers/{{ s.id }}/send-latest" class="inline">
@@ -144,6 +156,8 @@
     <select name="version">
       {% for c in subscription_choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
     </select>
+    <input type="text" name="sender_name" placeholder="Reader sender name">
+    <label class="pool-toggle"><input type="checkbox" name="to_pool" value="1"> links to pool</label>
     <button type="submit">Add</button>
   </form>
 

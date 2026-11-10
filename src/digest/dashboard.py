@@ -208,6 +208,7 @@ def dashboard(request: Request):
         last_delivery = store.last_delivery_by_email(conn)
         for sub in subscribers:
             sub["last"] = last_delivery.get(sub["email"])
+            sub["tag"] = intake.subscriber_tag(sub)
         deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
         intake_links = store.recent_intake_links(conn, TABLE_LIMIT)
     finally:
@@ -254,7 +255,8 @@ def dashboard(request: Request):
             "subscription_choices": sharing.SUBSCRIPTION_CHOICES,
             "sub_flash": request.query_params.get("sub"),
             "sub_flash_detail": request.query_params.get("detail", ""),
-            "intake_enabled": bool(cfg.intake_senders),
+            "intake_enabled": bool(subscribers or cfg.intake_senders),
+            "trigger_tag": cfg.reader_tag_trigger,
             "intake_links": intake_links,
             "intake_flash": request.query_params.get("intake"),
         },
@@ -444,6 +446,8 @@ def subscriber_add(
     email: str = Form(...),
     name: str = Form(""),
     version: str = Form("full"),
+    sender_name: str = Form(""),
+    to_pool: str = Form(""),
 ) -> RedirectResponse:
     email = email.strip().lower()
     if not _EMAIL_RE.match(email) or version not in sharing.SUBSCRIPTION_CHOICES:
@@ -451,7 +455,9 @@ def subscriber_add(
     cfg = request.app.state.cfg
     conn = store.connect(cfg.data_dir)
     try:
-        added = store.add_subscriber(conn, email, name.strip(), version)
+        added = store.add_subscriber(
+            conn, email, name.strip(), version, to_pool=bool(to_pool), sender_name=sender_name.strip()
+        )
     finally:
         conn.close()
     if not added:
@@ -486,6 +492,38 @@ def subscriber_version(subscriber_id: int, request: Request, version: str = Form
         conn.close()
     log.info(f"subscriber {sub['email']} version: {sub['format']} -> {version}")
     return _sub_redirect("version", f"{sub['email']} now gets {version}")
+
+
+@router.post("/subscribers/{subscriber_id}/sender")
+def subscriber_sender(subscriber_id: int, request: Request, sender_name: str = Form("")) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        store.set_subscriber_sender_name(conn, subscriber_id, sender_name.strip())
+    finally:
+        conn.close()
+    log.info(f"subscriber {sub['email']} sender name: {sub['sender_name']!r} -> {sender_name.strip()!r}")
+    return _sub_redirect("sender", f"{sub['email']} matched as \"{sender_name.strip()}\"" if sender_name.strip()
+                         else f"{sub['email']} matched by address only")
+
+
+@router.post("/subscribers/{subscriber_id}/pool")
+def subscriber_pool(subscriber_id: int, request: Request, to_pool: str = Form("")) -> RedirectResponse:
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        sub = store.get_subscriber(conn, subscriber_id)
+        if not sub:
+            return _sub_redirect("invalid")
+        store.set_subscriber_pool(conn, subscriber_id, bool(to_pool))
+    finally:
+        conn.close()
+    log.info(f"subscriber {sub['email']} links to pool: {sub['to_pool']} -> {bool(to_pool)}")
+    where = f"the pool ({cfg.reader_tag_trigger})" if to_pool else "your library only"
+    return _sub_redirect("pool", f"links from {sub['email']} now go to {where}")
 
 
 @router.post("/subscribers/{subscriber_id}/delete")

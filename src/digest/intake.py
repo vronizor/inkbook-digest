@@ -1,9 +1,10 @@
 """Turns link emails sent to the Reader library address into real Reader articles.
 
 Reader stores an emailed link as a one-word `email` document. For each email from a
-configured sender, this saves every link as an article tagged with the sender's tag and
-the Morning Paper trigger tag, then archives the original. Longer emails (forwarded
-newsletters) are only tagged and left in place. See SPEC_V6.md.
+subscriber (or an INTAKE_SENDERS entry), this saves every link as an article tagged with
+the sender's tag, plus the Morning Paper trigger tag when the sender feeds the pool, then
+archives the original. Longer emails (forwarded newsletters) are only tagged and left in
+place. See SPEC_V6.md and SPEC_V7.md.
 """
 
 import argparse
@@ -13,6 +14,7 @@ import logging
 import re
 import sys
 import threading
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -34,6 +36,9 @@ MAX_LINKS = 10
 _URL_RE = re.compile(r"https?://[^\s<>\"'()\[\]{}]+")
 _TAG_RE = re.compile(r"<[^>]+>")
 _CONTENT_FIELDS = {"html_content", "content", "summary", "notes"}
+_TAG_CHARS_RE = re.compile(r"[^a-z0-9-]")
+
+Sender = tuple[str, str, bool]
 
 is_running = threading.Lock()
 
@@ -42,16 +47,44 @@ class TransientError(Exception):
     pass
 
 
-def match_sender(doc: dict, senders: tuple[tuple[str, str], ...]) -> str | None:
+def _normalize_tag(text: str) -> str:
+    ascii_text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return _TAG_CHARS_RE.sub("", ascii_text.lower()).strip("-")
+
+
+def subscriber_tag(sub: dict) -> str:
+    candidates = [
+        words[0] for words in ((sub.get(k) or "").split() for k in ("name", "sender_name")) if words
+    ] + [sub["email"].split("@")[0]]
+    return next((t for t in map(_normalize_tag, candidates) if t), "friend")
+
+
+def senders(cfg: config.Config, conn) -> tuple[Sender, ...]:
+    """Each subscriber matches on its Reader display name and on its address.
+    INTAKE_SENDERS only adds keys no subscriber already covers, and always feeds the
+    pool (its pre-dashboard behaviour)."""
+    from_subs: list[Sender] = []
+    for sub in store.list_subscribers(conn):
+        tag = subscriber_tag(sub)
+        display = (sub["sender_name"] or "").strip().lower()
+        if display:
+            from_subs.append((display, tag, sub["to_pool"]))
+        from_subs.append((sub["email"].lower(), tag, sub["to_pool"]))
+    known = {key for key, _, _ in from_subs}
+    from_env = [(key, tag, True) for key, tag in cfg.intake_senders if key not in known]
+    return tuple(from_subs + from_env)
+
+
+def match_sender(doc: dict, senders: tuple[Sender, ...]) -> tuple[str, bool] | None:
     """Matches against every metadata string field, since which one carries the sender
     address on email documents isn't documented. A key can also be a display name."""
     haystack = " ".join(
         v.lower() for k, v in doc.items() if isinstance(v, str) and k not in _CONTENT_FIELDS
     )
     author = (doc.get("author") or "").strip().lower()
-    for key, tag in senders:
+    for key, tag, to_pool in senders:
         if key == author or ("@" in key and key in haystack):
-            return tag
+            return tag, to_pool
     return None
 
 
@@ -84,7 +117,9 @@ def _is_transient(e: Exception) -> bool:
     return False
 
 
-def process_email(cfg: config.Config, conn, reader: Reader, doc: dict, sender_tag: str) -> str:
+def process_email(
+    cfg: config.Config, conn, reader: Reader, doc: dict, sender_tag: str, to_pool: bool
+) -> str:
     full = reader.get_document(doc["id"]) or doc
     body = full.get("html_content") or full.get("content") or ""
     links = extract_links(body, cfg.intake_ignore_domains)
@@ -98,7 +133,7 @@ def process_email(cfg: config.Config, conn, reader: Reader, doc: dict, sender_ta
         return kind
 
     handled = store.intake_handled_urls(conn, doc["id"])
-    article_tags = [sender_tag, cfg.reader_tag_trigger]
+    article_tags = [sender_tag] + ([cfg.reader_tag_trigger] if to_pool else [])
     saved = failed = 0
     for url in links:
         if url in handled:
@@ -135,11 +170,13 @@ def process_email(cfg: config.Config, conn, reader: Reader, doc: dict, sender_ta
 
 
 def run(cfg: config.Config) -> int:
-    if not cfg.intake_senders:
-        log.info("intake: no INTAKE_SENDERS configured, nothing to do")
-        return 0
     started = datetime.now(timezone.utc)
     conn = store.connect(cfg.data_dir)
+    known = senders(cfg, conn)
+    if not known:
+        conn.close()
+        log.info("intake: no subscribers or INTAKE_SENDERS, nothing to do")
+        return 0
     reader = Reader(cfg.reader_token)
     try:
         cursor = store.get_setting(conn, CURSOR_KEY) or (started - FIRST_RUN_LOOKBACK).isoformat()
@@ -149,11 +186,12 @@ def run(cfg: config.Config) -> int:
             for doc in reader.list_documents(category="email", updated_after=cursor):
                 if doc["id"] in done:
                     continue
-                sender_tag = match_sender(doc, cfg.intake_senders)
-                if sender_tag is None:
+                match = match_sender(doc, known)
+                if match is None:
                     continue
+                sender_tag, to_pool = match
                 try:
-                    process_email(cfg, conn, reader, doc, sender_tag)
+                    process_email(cfg, conn, reader, doc, sender_tag, to_pool)
                 except httpx.HTTPStatusError as e:
                     if _is_transient(e):
                         raise TransientError(f"{doc['id']}: HTTP {e.response.status_code}") from e
@@ -187,15 +225,20 @@ def run_with_lock(cfg: config.Config) -> None:
 
 
 def inspect(cfg: config.Config, days: int) -> None:
+    conn = store.connect(cfg.data_dir)
     reader = Reader(cfg.reader_token)
     try:
+        known = senders(cfg, conn)
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         for doc in reader.list_documents(category="email", updated_after=since):
             meta = {k: v for k, v in doc.items() if k not in _CONTENT_FIELDS}
-            meta["_matched_tag"] = match_sender(doc, cfg.intake_senders)
+            match = match_sender(doc, known)
+            meta["_matched_tag"] = match[0] if match else None
+            meta["_to_pool"] = match[1] if match else None
             print(json.dumps(meta, ensure_ascii=False, indent=2))
     finally:
         reader.close()
+        conn.close()
 
 
 def main() -> int:
