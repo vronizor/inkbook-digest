@@ -28,6 +28,8 @@ If the queue is empty, log empty run, no alert. Same-day re-runs produce version
 
 EPUBs are kept in `$DATA_DIR/epubs/` indefinitely by default. Missing EPUBs for past digests can be rebuilt from Reader with `python -m digest.recover --since YYYY-MM-DD [--dry-run]` (articles must still exist in Reader). Set `EPUB_RETENTION_DAYS=N` to delete files older than N days at startup.
 
+Past pool sizes (for the dashboard chart) can be reconstructed from Reader timestamps with `python -m digest.backfill_pool [--days 120] [--dry-run]`. It only fills days without a live snapshot and can be rerun safely.
+
 ### Library
 
 - Drag-and-drop EPUB or PDF files onto the dashboard.

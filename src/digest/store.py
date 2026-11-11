@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS pool_snapshots (
   day TEXT PRIMARY KEY,
   taken_at TEXT NOT NULL,
   articles INTEGER NOT NULL,
-  words INTEGER NOT NULL
+  words INTEGER NOT NULL,
+  source TEXT NOT NULL DEFAULT 'live'
 );
 """
 
@@ -109,6 +110,7 @@ ADDITIVE_ALTERS = (
     "ALTER TABLE sent_articles ADD COLUMN word_count INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE subscribers ADD COLUMN to_pool INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE subscribers ADD COLUMN sender_name TEXT",
+    "ALTER TABLE pool_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'live'",
 )
 
 
@@ -458,9 +460,9 @@ def recent_intake_links(conn: sqlite3.Connection, limit: int = 30) -> list[dict]
 
 def record_pool_snapshot(conn: sqlite3.Connection, day: str, articles: int, words: int) -> None:
     conn.execute(
-        "INSERT INTO pool_snapshots (day, taken_at, articles, words) VALUES (?, ?, ?, ?) "
+        "INSERT INTO pool_snapshots (day, taken_at, articles, words, source) VALUES (?, ?, ?, ?, 'live') "
         "ON CONFLICT(day) DO UPDATE SET taken_at = excluded.taken_at, "
-        "articles = excluded.articles, words = excluded.words",
+        "articles = excluded.articles, words = excluded.words, source = 'live'",
         (day, _now(), articles, words),
     )
 

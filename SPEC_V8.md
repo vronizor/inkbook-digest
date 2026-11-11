@@ -7,6 +7,7 @@ Extends `SPEC_V7.md`. Same features, reorganised into two pages with an e-ink lo
 - New table `pool_snapshots(day, taken_at, articles, words)`, one row per local day, latest measurement wins.
 - Written by a daily job at 03:15 local (also two minutes after startup) and whenever the dashboard refreshes its queue stats.
 - A failed snapshot logs a warning; the next one retries.
+- `source` is `live` or `backfill`. `python -m digest.backfill_pool [--days N] [--dry-run]` reconstructs past days: an article is in the pool from its trigger tag's `created` time (else `saved_at`) until its `sent_at`. Articles untagged or deleted without being sent are missing, and `saved_at` entry times overcount. Only days without a live snapshot are written; reruns replace earlier backfill rows; a live snapshot overwrites a backfilled day. The dry run prints the timestamp source, a sample tag payload, the weekly series and a comparison with today's live snapshot.
 
 ## Kiosk page (`/`)
 
