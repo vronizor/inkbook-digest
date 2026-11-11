@@ -180,7 +180,6 @@ def chart_view(rows: list[dict], budget: int) -> dict:
             "words": r["words"], "n": r["n"],
             "words_k": approx_words(r["words"]) if r["words"] else "",
             "h": round(r["words"] / top * 100, 1),
-            "avg": round(r["words"] / r["n"]) if r["n"] else None,
             "pool": r["pool"], "added": added, "x": xs[i],
         })
         prev = r["monday"]

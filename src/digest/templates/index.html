@@ -23,7 +23,7 @@
     <div>
       <h2 class="h2" data-view-only="weekly">How much I read</h2>
       <h2 class="h2" data-view-only="cumul" hidden>Added vs read</h2>
-      <p class="mono small muted" data-view-only="weekly">words per week · number in the bar = articles</p>
+      <p class="mono small muted" data-view-only="weekly">words per week · number in the bar = articles · <span class="budget-key" aria-hidden="true"></span> budget {{ chart.budget_k }}</p>
       <p class="mono small muted" data-view-only="cumul" hidden>running totals{% if chart.has_pool_history %} since {{ chart.history_from }} · the shaded gap is how much the pool grew{% endif %}</p>
     </div>
     <div class="seg" role="group" aria-label="Chart view">
@@ -35,7 +35,6 @@
   <div data-view-only="weekly">
     <div class="bars">
       <div class="budget-line" style="bottom: {{ chart.budget_pct }}%" aria-hidden="true"></div>
-      <span class="budget-label mono" style="bottom: {{ chart.budget_pct }}%">budget {{ chart.budget_k }}</span>
       {% for w in chart.weeks %}
       <button type="button" class="bar" data-week="{{ loop.index0 }}" aria-label="Week of {{ w.full }}: {{ w.n }} articles, {{ '{:,}'.format(w.words) }} words">
         <span class="bar-val mono">{{ w.words_k }}</span>
@@ -77,7 +76,7 @@
 <section id="editions">
   <div class="sec-head">
     <h2 class="h2">Editions</h2>
-    <span class="mono small muted">{{ "{:,}".format(totals.digests) }} editions · {{ "{:,}".format(totals.articles) }} articles · {{ "{:,}".format(totals.words) }} words</span>
+    <span class="mono small muted">{{ "{:,}".format(totals.digests) }} editions · {{ "{:,}".format(totals.articles) }} articles · {{ "{:,}".format(totals.words) }} words{% if totals.digests %}<br>per issue: {{ totals.avg_articles }} articles · {{ "{:,}".format(totals.avg_words) }} words{% endif %}</span>
   </div>
   {% if editions %}
   <div class="list" data-more-list>
@@ -322,7 +321,6 @@
     current = i;
     const w = weeks[i];
     const parts = ['week of ' + w.full, fmt(w.words) + ' words', w.n + ' article' + (w.n === 1 ? '' : 's')];
-    if (w.avg) parts.push('avg ' + fmt(w.avg) + ' / article');
     if (w.added !== null) parts.push('added ' + (w.added < 0 ? '−' : '+') + fmt(Math.abs(w.added)));
     if (w.pool !== null) parts.push('pool ' + fmt(w.pool));
     readout.textContent = parts.join(' · ');

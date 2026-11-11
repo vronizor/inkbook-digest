@@ -27,6 +27,7 @@
       <a href="/library" class="nav-item nav-sep"{% if page == "library" %} aria-current="page"{% endif %}>Library<span class="mono small">{{ book_count }} book{{ "s" if book_count != 1 }}</span></a>
     </nav>
     <div class="side-status">
+      {% if page != "library" %}
       <p class="mono small">
         {% if is_running %}● printing now
         {% elif paused %}○ paused
@@ -37,6 +38,7 @@
         <form method="post" action="/pause"><button type="submit" class="btn">{% if paused %}Resume{% else %}Pause{% endif %}</button></form>
         <form method="post" action="/trigger"><button type="submit" class="btn btn-solid"{% if is_running %} disabled{% endif %}>Send now</button></form>
       </div>
+      {% endif %}
       <p class="mono small muted opds">OPDS · {{ opds_url }}</p>
     </div>
   </aside>

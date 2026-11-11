@@ -185,7 +185,12 @@ def dashboard(request: Request):
             "SELECT COUNT(*), COALESCE(SUM(article_count), 0), COALESCE(SUM(total_words), 0) "
             "FROM digests WHERE status = 'sent'"
         ).fetchone()
-        totals = {"digests": totals_row[0], "articles": totals_row[1], "words": totals_row[2]}
+        n_issues = totals_row[0]
+        totals = {
+            "digests": n_issues, "articles": totals_row[1], "words": totals_row[2],
+            "avg_articles": round(totals_row[1] / n_issues, 1) if n_issues else 0,
+            "avg_words": round(totals_row[2] / n_issues) if n_issues else 0,
+        }
         editions = _editions(conn, TABLE_LIMIT)
 
         runs = []
@@ -237,7 +242,7 @@ def dashboard(request: Request):
             "pool_summary": pool_summary, "queue_error": queue_error,
             "chart": chart,
             "chart_weeks_json": [
-                {k: w[k] for k in ("full", "words", "n", "avg", "pool", "added")} for w in chart["weeks"]
+                {k: w[k] for k in ("full", "words", "n", "pool", "added")} for w in chart["weeks"]
             ],
             "totals": totals, "editions": editions, "runs": runs,
             "word_budget": word_budget, "wb_min": WB_MIN, "wb_max": WB_MAX,

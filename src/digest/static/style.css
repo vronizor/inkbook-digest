@@ -77,7 +77,7 @@ summary.btn::-webkit-details-marker { display: none; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .bars { position: relative; height: 220px; margin-top: 22px; display: flex; align-items: flex-end; gap: 10px; border-bottom: 1.5px solid var(--ink); }
 .budget-line { position: absolute; left: 0; right: 0; border-top: 1px dashed var(--ink); }
-.budget-label { position: absolute; right: 0; transform: translateY(-100%); font-size: 11px; color: var(--muted); background: var(--paper); padding: 0 0 2px 6px; z-index: 2; }
+.budget-key { display: inline-block; width: 18px; vertical-align: middle; border-top: 1px dashed var(--ink); }
 .bar { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; background: transparent; border: 0; padding: 0; cursor: pointer; color: var(--muted); position: relative; z-index: 1; font: inherit; }
 .bar-val { font-size: 11px; background: var(--paper); padding: 0 2px; }
 .bar-fill { width: 100%; background: var(--bar); display: flex; align-items: flex-end; justify-content: center; }

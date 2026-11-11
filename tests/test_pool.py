@@ -83,7 +83,6 @@ class WeeklyTest(unittest.TestCase):
         self.assertTrue(view["has_pool_history"])
         self.assertEqual(view["weeks"][1]["added"], 55_000 - 52_000 + 8000)
         self.assertIsNone(view["weeks"][0]["added"])
-        self.assertEqual(view["weeks"][1]["avg"], 2667)
         self.assertEqual([w["label"] for w in view["weeks"]], ["26 Oct", "2 Nov", "9"])
         self.assertEqual(len(view["read_pts"].split()), 3)
         self.assertEqual(len(view["saved_pts"].split()), 2)
