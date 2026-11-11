@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import time
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
@@ -11,8 +11,7 @@ from fastapi import APIRouter, BackgroundTasks, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from digest import intake, library, schedule, sharing, store
-from digest.reader import Reader, word_count as reader_word_count
+from digest import intake, library, pool, schedule, sharing, store
 
 log = logging.getLogger(__name__)
 
@@ -108,15 +107,8 @@ def _get_queue_stats(cfg, conn) -> tuple[dict | None, str | None]:
     if _queue_cache["expires"] > now:
         return _queue_cache["data"], _queue_cache["error"]
     try:
-        reader = Reader(cfg.reader_token)
-        try:
-            articles = reader.list_queue(cfg.reader_tag_trigger)
-        finally:
-            reader.close()
-        already = store.already_sent_ids(conn)
-        pending = [a for a in articles if a["id"] not in already]
-        total_words = sum(reader_word_count(a) for a in pending)
-        stats = {"count": len(pending), "total_words": total_words}
+        stats = pool.measure(cfg, conn)
+        pool.record(conn, cfg.tz, stats)
         _queue_cache.update(data=stats, error=None, expires=now + QUEUE_TTL_OK)
         return stats, None
     except Exception as e:
@@ -125,55 +117,76 @@ def _get_queue_stats(cfg, conn) -> tuple[dict | None, str | None]:
         return None, str(e)
 
 
-def _chart_data(conn) -> list[dict]:
-    today = date.today()
-    rows = conn.execute(
-        "SELECT DATE(sent_at) AS day, COUNT(*) AS n, COALESCE(SUM(word_count), 0) AS words "
-        "FROM sent_articles WHERE sent_at >= DATE('now', '-29 days') "
-        "GROUP BY day"
+def _editions(conn, limit: int) -> list[dict]:
+    digests = conn.execute(
+        "SELECT id, sent_at, volume, article_count, total_words, status FROM digests "
+        "ORDER BY sent_at DESC LIMIT ?", (limit,),
     ).fetchall()
-    by_day = {r[0]: (r[1], r[2]) for r in rows}
-    out = []
-    for i in range(30):
-        d = (today - timedelta(days=29 - i)).isoformat()
-        n, w = by_day.get(d, (0, 0))
-        out.append({"day": d, "n": n, "words": w})
-    return out
+    if not digests:
+        return []
+    ids = [d[0] for d in digests]
+    marks = ",".join("?" * len(ids))
+    articles: dict[int, list[dict]] = {i: [] for i in ids}
+    for digest_id, title, url, words in conn.execute(
+        f"SELECT digest_id, title, url, word_count FROM sent_articles WHERE digest_id IN ({marks}) "
+        "ORDER BY rowid", ids,
+    ):
+        articles[digest_id].append({"title": title or "(untitled)", "url": url or "", "words": words})
+    mailed: dict[int, dict[str, int]] = {i: {} for i in ids}
+    for digest_id, status, n in conn.execute(
+        f"SELECT digest_id, status, COUNT(DISTINCT email) FROM deliveries WHERE digest_id IN ({marks}) "
+        "GROUP BY digest_id, status", ids,
+    ):
+        mailed[digest_id][status] = n
+    return [
+        {
+            "id": d[0], "sent_at": d[1], "volume": d[2], "article_count": d[3], "total_words": d[4],
+            "status": d[5], "articles": articles[d[0]],
+            "mailed": mailed[d[0]].get("sent", 0), "mail_failed": mailed[d[0]].get("failed", 0),
+        }
+        for d in digests
+    ]
+
+
+def _link_state(link: dict, pool_by_tag: dict[str, bool]) -> str:
+    if link["status"] == "error":
+        return "failed"
+    if link["issue_sent_at"]:
+        return f"in issue {_when(link['issue_sent_at']).split(',')[0]}"
+    if link["sender_tag"] in pool_by_tag:
+        return "in pool" if pool_by_tag[link["sender_tag"]] else "library"
+    return "saved"
+
+
+def _sidebar(cfg, conn, request: Request) -> dict:
+    paused = store.get_setting(conn, "paused") == "true"
+    sched = schedule.load(conn)
+    now = datetime.now(ZoneInfo(cfg.tz))
+    upcoming = schedule.next_runs(sched, now, 2)
+    return {
+        "paused": paused,
+        "sched": sched,
+        "now": now,
+        "upcoming": upcoming,
+        "next_run": upcoming[0] if upcoming and not paused else None,
+        "is_running": request.app.state.is_running.locked(),
+        "opds_url": _opds_url(cfg, request),
+        "book_count": conn.execute("SELECT COUNT(*) FROM library_books").fetchone()[0],
+    }
 
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard(request: Request):
     cfg = request.app.state.cfg
-    scheduler = request.app.state.scheduler
-    is_running = request.app.state.is_running
-
     conn = store.connect(cfg.data_dir)
     try:
-        last = conn.execute(
-            "SELECT sent_at, article_count, volume, total_words FROM digests "
-            "WHERE status = 'sent' ORDER BY sent_at DESC LIMIT 1"
-        ).fetchone()
-
+        side = _sidebar(cfg, conn, request)
         totals_row = conn.execute(
             "SELECT COUNT(*), COALESCE(SUM(article_count), 0), COALESCE(SUM(total_words), 0) "
             "FROM digests WHERE status = 'sent'"
         ).fetchone()
-        totals = {
-            "digests": totals_row[0],
-            "articles": totals_row[1],
-            "words": totals_row[2],
-        }
-
-        digests = [
-            {
-                "id": r[0], "sent_at": r[1], "volume": r[2], "article_count": r[3],
-                "total_words": r[4], "status": r[5],
-            }
-            for r in conn.execute(
-                "SELECT id, sent_at, volume, article_count, total_words, status FROM digests "
-                "ORDER BY sent_at DESC LIMIT ?", (TABLE_LIMIT,),
-            )
-        ]
+        totals = {"digests": totals_row[0], "articles": totals_row[1], "words": totals_row[2]}
+        editions = _editions(conn, TABLE_LIMIT)
 
         runs = []
         for r in conn.execute(
@@ -190,75 +203,93 @@ def dashboard(request: Request):
                 "duration": duration, "log": _truncate_log(r[4]),
             })
 
-        articles = [
-            {"title": r[0] or "(untitled)", "url": r[1] or "", "word_count": r[2], "sent_at": r[3]}
-            for r in conn.execute(
-                "SELECT title, url, word_count, sent_at FROM sent_articles "
-                "ORDER BY sent_at DESC LIMIT ?", (TABLE_LIMIT,),
-            )
-        ]
-
-        paused = store.get_setting(conn, "paused") == "true"
         word_budget = store.get_word_budget(conn)
-        sched = schedule.load(conn)
         queue_stats, queue_error = _get_queue_stats(cfg, conn)
-        chart = _chart_data(conn)
-        books = library.list_books(conn)
+        pool_summary = None
+        if queue_stats is not None:
+            pool_summary = pool.summary(
+                queue_stats["total_words"],
+                pool.average_issue_words(conn, word_budget),
+                pool.words_around(conn, side["now"].date() - timedelta(days=pool.MONTH_LOOKBACK_DAYS)),
+            )
+        chart = pool.chart_view(pool.weekly(conn, cfg.tz, side["now"].date()), word_budget)
+
         subscribers = store.list_subscribers(conn)
         last_delivery = store.last_delivery_by_email(conn)
         for sub in subscribers:
             sub["last"] = last_delivery.get(sub["email"])
             sub["tag"] = intake.subscriber_tag(sub)
+        pool_by_tag = {s["tag"]: s["to_pool"] for s in subscribers}
+        links = store.recent_intake_links_with_issue(conn, TABLE_LIMIT)
+        for link in links:
+            link["state"] = _link_state(link, pool_by_tag)
         deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
-        intake_links = store.recent_intake_links(conn, TABLE_LIMIT)
     finally:
         conn.close()
 
-    now = datetime.now(ZoneInfo(cfg.tz))
-    upcoming = [r.isoformat() for r in schedule.next_runs(sched, now, 2)]
-    next_run = upcoming[0] if upcoming and not paused else None
-    today = now.date()
-
-    upload_flashes = _upload_flashes(request)
-    delete_flash = (
-        request.query_params.get("name", "")
-        if request.query_params.get("library_delete") == "ok"
-        else None
-    )
-
+    today = side["now"].date()
     return templates.TemplateResponse(
         request, "index.html", {
-            "last_digest": last, "next_run": next_run, "paused": paused,
-            "queue_stats": queue_stats, "queue_error": queue_error,
-            "totals": totals, "digests": digests, "runs": runs, "articles": articles,
-            "chart_data": chart, "word_budget": word_budget,
-            "wb_min": WB_MIN, "wb_max": WB_MAX,
-            "sched": sched,
-            "sched_summary": schedule.describe(sched),
-            "sched_upcoming": upcoming,
-            "this_week_on": schedule.is_on_week(sched, today),
-            "next_week_on": schedule.is_on_week(sched, today + timedelta(days=7)),
+            **side,
+            "page": "kiosk",
+            "next_phrase": "Paused. No issue scheduled." if side["paused"]
+                           else pool.next_issue_phrase(side["next_run"], side["now"]),
+            "pool_summary": pool_summary, "queue_error": queue_error,
+            "chart": chart,
+            "chart_weeks_json": [
+                {k: w[k] for k in ("full", "words", "n", "avg", "pool", "added")} for w in chart["weeks"]
+            ],
+            "totals": totals, "editions": editions, "runs": runs,
+            "word_budget": word_budget, "wb_min": WB_MIN, "wb_max": WB_MAX,
+            "sched_summary": schedule.describe(side["sched"]),
+            "sched_upcoming": [r.isoformat() for r in side["upcoming"]],
+            "this_week_on": schedule.is_on_week(side["sched"], today),
+            "next_week_on": schedule.is_on_week(side["sched"], today + timedelta(days=7)),
             "weekday_names": schedule.FULL,
             "weeks_max": schedule.WEEKS_MAX,
             "triggered": request.query_params.get("triggered"),
             "settings_flash": request.query_params.get("settings"),
             "settings_detail": request.query_params.get("detail", ""),
-            "is_running": is_running.locked(),
-            "books": books,
-            "opds_url": _opds_url(cfg, request),
-            "upload_flashes": upload_flashes,
-            "delete_flash": delete_flash,
             "subscribers": subscribers,
             "deliveries": deliveries,
             "latest_issue": sharing.latest_issue(cfg.data_dir),
             "share_tag": cfg.share_tag,
+            "share_mode": sharing.describe_mode(cfg.share_tag),
             "subscription_choices": sharing.SUBSCRIPTION_CHOICES,
             "sub_flash": request.query_params.get("sub"),
             "sub_flash_detail": request.query_params.get("detail", ""),
             "intake_enabled": bool(subscribers or cfg.intake_senders),
             "trigger_tag": cfg.reader_tag_trigger,
-            "intake_links": intake_links,
+            "links": links,
+            "failed_links": sum(1 for l in links[:10] if l["state"] == "failed"),
             "intake_flash": request.query_params.get("intake"),
+        },
+    )
+
+
+@router.get("/library", response_class=HTMLResponse)
+def library_page(request: Request):
+    cfg = request.app.state.cfg
+    conn = store.connect(cfg.data_dir)
+    try:
+        side = _sidebar(cfg, conn, request)
+        books = library.list_books(conn)
+    finally:
+        conn.close()
+    delete_flash = (
+        request.query_params.get("name", "")
+        if request.query_params.get("library_delete") == "ok"
+        else None
+    )
+    return templates.TemplateResponse(
+        request, "library.html", {
+            **side,
+            "page": "library",
+            "books": books,
+            "total_bytes": sum(b["size_bytes"] for b in books),
+            "upload_flashes": _upload_flashes(request),
+            "delete_flash": delete_flash,
+            "max_upload_mb": cfg.library_max_upload_mb,
         },
     )
 
@@ -415,7 +446,7 @@ async def library_upload(
     finally:
         conn.close()
     qs = "&".join(f"{k}={quote(v, safe='')}" for k, v in pairs)
-    return RedirectResponse(url=f"/?{qs}" if qs else "/", status_code=303)
+    return RedirectResponse(url=f"/library?{qs}" if qs else "/library", status_code=303)
 
 
 @router.post("/library/{book_id}/delete")
@@ -431,7 +462,7 @@ def library_delete(book_id: int, request: Request) -> RedirectResponse:
     finally:
         conn.close()
     return RedirectResponse(
-        url=f"/?library_delete=ok&name={quote(name, safe='')}", status_code=303
+        url=f"/library?library_delete=ok&name={quote(name, safe='')}", status_code=303
     )
 
 
