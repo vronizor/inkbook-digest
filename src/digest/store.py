@@ -94,6 +94,13 @@ CREATE TABLE IF NOT EXISTS intake_links (
   saved_at TEXT NOT NULL,
   UNIQUE (email_document_id, url)
 );
+
+CREATE TABLE IF NOT EXISTS pool_snapshots (
+  day TEXT PRIMARY KEY,
+  taken_at TEXT NOT NULL,
+  articles INTEGER NOT NULL,
+  words INTEGER NOT NULL
+);
 """
 
 ADDITIVE_ALTERS = (
@@ -445,5 +452,39 @@ def recent_intake_links(conn: sqlite3.Connection, limit: int = 30) -> list[dict]
     )
     return [
         {"url": r[0], "sender_tag": r[1], "status": r[2], "error": r[3], "saved_at": r[4]}
+        for r in rows
+    ]
+
+
+def record_pool_snapshot(conn: sqlite3.Connection, day: str, articles: int, words: int) -> None:
+    conn.execute(
+        "INSERT INTO pool_snapshots (day, taken_at, articles, words) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(day) DO UPDATE SET taken_at = excluded.taken_at, "
+        "articles = excluded.articles, words = excluded.words",
+        (day, _now(), articles, words),
+    )
+
+
+def pool_snapshots(conn: sqlite3.Connection, since_day: str) -> list[dict]:
+    rows = conn.execute(
+        "SELECT day, articles, words FROM pool_snapshots WHERE day >= ? ORDER BY day", (since_day,)
+    )
+    return [{"day": r[0], "articles": r[1], "words": r[2]} for r in rows]
+
+
+def recent_intake_links_with_issue(conn: sqlite3.Connection, limit: int = 30) -> list[dict]:
+    rows = conn.execute(
+        "SELECT l.url, l.sender_tag, l.status, l.error, l.saved_at, a.title, d.sent_at "
+        "FROM intake_links l "
+        "LEFT JOIN sent_articles a ON a.reader_document_id = l.reader_document_id "
+        "LEFT JOIN digests d ON d.id = a.digest_id "
+        "ORDER BY l.id DESC LIMIT ?",
+        (limit,),
+    )
+    return [
+        {
+            "url": r[0], "sender_tag": r[1], "status": r[2], "error": r[3], "saved_at": r[4],
+            "title": r[5], "issue_sent_at": r[6],
+        }
         for r in rows
     ]

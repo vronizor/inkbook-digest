@@ -11,11 +11,12 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.events import EVENT_JOB_MISSED, JobExecutionEvent
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from digest import config, epub, intake, mailer, schedule, sharing, store
+from digest import config, epub, intake, mailer, pool, schedule, sharing, store
 from digest.reader import Reader, tag_names, word_count as reader_word_count
 
 _PKG_DIR = Path(__file__).parent
@@ -295,6 +296,14 @@ async def lifespan(app: FastAPI):
         coalesce=True,
         max_instances=1,
         next_run_time=datetime.now(timezone.utc) + timedelta(minutes=1),
+    )
+    scheduler.add_job(
+        lambda: pool.snapshot_job(cfg),
+        CronTrigger(hour=3, minute=15, timezone=ZoneInfo(cfg.tz)),
+        id=pool.JOB_ID,
+        coalesce=True,
+        max_instances=1,
+        next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
     )
     scheduler.start()
     log.info(

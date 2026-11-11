@@ -1,502 +1,431 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>Kiosk</title>
-  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
-  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-</head>
-<body>
-
-<header>
-  <div class="brand">
-    <img class="brand-mark" src="/static/logo.svg" alt="" width="48" height="48">
-    <h1>Kiosk</h1>
-  </div>
-  <div class="actions">
-    <form method="post" action="/pause" class="inline">
-      <button type="submit" class="btn-pause">{% if paused %}Resume{% else %}Pause{% endif %}</button>
-    </form>
-    <form method="post" action="/trigger" class="inline">
-      <button type="submit"{% if is_running %} disabled{% endif %}>Trigger</button>
-    </form>
-  </div>
-</header>
-
-<p class="opds-hint">OPDS feed: <code>{{ opds_url }}</code></p>
+{% extends "base.html" %}
+{% block main %}
 
 <div id="flashes">
 {% if triggered == "ok" %}
-  <div class="flash flash-info">Run started — check the runs table in a few seconds.</div>
+  <div class="flash">Run started. The new edition shows up below in a minute.</div>
 {% elif triggered == "already_running" %}
   <div class="flash flash-warn">A run is already in progress.</div>
 {% endif %}
-{% for f in upload_flashes %}
-  {% if f.kind == "ok" %}
-    <div class="flash flash-info">Uploaded: {{ f.name }}</div>
-  {% elif f.kind == "conflict" %}
-    <div class="flash flash-warn">{{ f.name }} already exists. Rename and try again.</div>
-  {% elif f.kind == "invalid" %}
-    <div class="flash flash-warn">{{ f.name }} rejected: {{ f.reason }}</div>
-  {% endif %}
-{% endfor %}
-{% if delete_flash %}
-  <div class="flash flash-info">Deleted: {{ delete_flash }}</div>
-{% endif %}
 </div>
 
-<section class="library">
-  <h2>
-    Library
-    <form method="post" action="/library/upload" enctype="multipart/form-data" class="upload-form">
-      <input type="file" name="files" multiple accept=".epub,.pdf" required onchange="this.form.submit()">
-      <button type="button" onclick="this.previousElementSibling.click()">Upload</button>
-    </form>
-  </h2>
-  {% if books %}
-  <ul class="book-list">
-    {% for b in books %}
-    <li class="book">
-      <img class="cover" src="/opds/cover/library/{{ b.id }}" alt="">
-      <div class="book-meta">
-        <div class="book-name">{{ b.filename }}</div>
-        <div class="book-sub">{{ b.author or 'Unknown' }} · {{ b.format|upper }} · {{ b.size_bytes|human_size }} · {{ b.added_at[:10] }}</div>
-      </div>
-      <button type="button" class="book-delete" title="Delete"
-              onclick="confirmDelete({{ b.id }}, {{ b.filename|tojson }})">×</button>
-    </li>
-    {% endfor %}
-  </ul>
+<section class="hero">
+  <p class="hero-next">{% if is_running %}Printing the next issue now.{% else %}{{ next_phrase }}{% endif %}</p>
+  {% if pool_summary %}
+    <p class="hero-pool">About <strong>{{ pool_summary.words }} words</strong> in the pool{% if pool_summary.worth %}, {{ pool_summary.worth }}{% endif %}.{% if pool_summary.trend %} {{ pool_summary.trend }}{% endif %}</p>
   {% else %}
-  <p class="no-data">no books yet</p>
+    <p class="hero-pool">Pool size unavailable right now.{% if queue_error %} <small class="mono">{{ queue_error }}</small>{% endif %}</p>
   {% endif %}
 </section>
 
-<section class="subscribers" id="subscribers">
-  <h2>Subscribers</h2>
-  {% if sub_flash == "added" %}<div class="flash flash-info">Added {{ sub_flash_detail }}.</div>
-  {% elif sub_flash == "exists" %}<div class="flash flash-warn">{{ sub_flash_detail }} is already subscribed.</div>
-  {% elif sub_flash == "invalid" %}<div class="flash flash-warn">Invalid subscriber{% if sub_flash_detail %}: {{ sub_flash_detail }}{% endif %}.</div>
-  {% elif sub_flash in ("version", "sender", "pool") %}<div class="flash flash-info">{{ sub_flash_detail }}.</div>
-  {% elif sub_flash == "removed" %}<div class="flash flash-info">Removed {{ sub_flash_detail }}.</div>
-  {% elif sub_flash == "sent" %}<div class="flash flash-info">Latest issue sent to {{ sub_flash_detail }}.</div>
-  {% elif sub_flash == "send_failed" %}<div class="flash flash-warn">Send failed: {{ sub_flash_detail }}</div>
-  {% elif sub_flash == "nothing" %}<div class="flash flash-warn">No shared issue yet.</div>
-  {% endif %}
+<section class="chart" id="chart">
+  <div class="chart-head">
+    <div>
+      <h2 class="h2" data-view-only="weekly">How much I read</h2>
+      <h2 class="h2" data-view-only="cumul" hidden>Saved vs read</h2>
+      <p class="mono small muted" data-view-only="weekly">words per week · number in the bar = articles</p>
+      <p class="mono small muted" data-view-only="cumul" hidden>running totals · the shaded gap is the pool</p>
+    </div>
+    <div class="seg" role="group" aria-label="Chart view">
+      <button type="button" data-view="weekly" aria-pressed="true">Weekly</button>
+      <button type="button" data-view="cumul" aria-pressed="false">Cumulative</button>
+    </div>
+  </div>
 
-  <p class="hint">
-    {% if latest_issue %}
-      Last shared issue: <span class="ts">{{ latest_issue.date }}</span>{% if latest_issue.volume > 1 %} (Vol. {{ latest_issue.volume }}){% endif %} · {{ latest_issue.articles }} article{{ "s" if latest_issue.articles != 1 }} · preview
-      <a href="/issues/{{ latest_issue.digest_id }}/full" target="_blank">full</a> /
-      <a href="/issues/{{ latest_issue.digest_id }}/teaser" target="_blank">teaser</a>
-    {% else %}
-      Nothing shared yet.
+  <div data-view-only="weekly">
+    <div class="bars">
+      <div class="budget-line" style="bottom: {{ chart.budget_pct }}%" aria-hidden="true"></div>
+      <span class="budget-label mono" style="bottom: {{ chart.budget_pct }}%">budget {{ chart.budget_k }}</span>
+      {% for w in chart.weeks %}
+      <button type="button" class="bar" data-week="{{ loop.index0 }}" aria-label="Week of {{ w.full }}: {{ w.n }} articles, {{ '{:,}'.format(w.words) }} words">
+        <span class="bar-val mono">{{ w.words_k }}</span>
+        <span class="bar-fill" style="height: {{ w.h }}%"><span class="bar-n mono">{{ w.n or "" }}</span></span>
+      </button>
+      {% endfor %}
+    </div>
+    <div class="axis mono">{% for w in chart.weeks %}<span>{{ w.label }}</span>{% endfor %}</div>
+  </div>
+
+  <div data-view-only="cumul" hidden>
+    <div class="cumul">
+      <svg viewBox="0 0 {{ chart.view_w }} {{ chart.view_h }}" preserveAspectRatio="none" role="img" aria-label="Cumulative words saved and read; the gap between the lines is the pool">
+        {% if chart.has_pool_history %}
+        <polygon points="{{ chart.gap_pts }}" class="cumul-gap"></polygon>
+        <polyline points="{{ chart.saved_pts }}" class="cumul-saved"></polyline>
+        {% endif %}
+        <polyline points="{{ chart.read_pts }}" class="cumul-read"></polyline>
+        <line class="cumul-sel" x1="0" y1="0" x2="0" y2="{{ chart.view_h }}"></line>
+      </svg>
+      <div class="cumul-hit">
+        {% for w in chart.weeks %}<button type="button" data-week="{{ loop.index0 }}" aria-label="Week of {{ w.full }}"></button>{% endfor %}
+      </div>
+    </div>
+    <div class="axis axis-spread mono">{% for w in chart.weeks %}<span>{{ w.label }}</span>{% endfor %}</div>
+    <div class="legend mono small">
+      <span><i class="lg-saved"></i>saved to pool</span>
+      <span><i class="lg-read"></i>read</span>
+      <span><i class="lg-gap"></i>gap = pool</span>
+    </div>
+    {% if not chart.has_pool_history %}
+    <p class="mono small muted">The saved line appears once two weeks of pool snapshots exist (one is taken every day).</p>
     {% endif %}
-    · {% if share_tag %}articles also tagged <code>{{ share_tag }}</code> are emailed{% else %}every digest article is emailed{% endif %}
-  </p>
+  </div>
 
-  {% if subscribers %}
-  <table class="sub-table">
-    <thead><tr><th>Name</th><th>Email</th><th>Version</th><th>Last delivery</th><th title="Links they email to the Reader library address">Links</th><th></th></tr></thead>
-    <tbody>
+  <p class="readout mono" id="readout"></p>
+</section>
+
+<section id="editions">
+  <div class="sec-head">
+    <h2 class="h2">Editions</h2>
+    <span class="mono small muted">{{ "{:,}".format(totals.digests) }} editions · {{ "{:,}".format(totals.articles) }} articles · {{ "{:,}".format(totals.words) }} words</span>
+  </div>
+  {% if editions %}
+  <div class="list" data-more-list>
+    {% for e in editions %}
+    <details class="edition"{% if loop.first %} open{% endif %}{% if loop.index > 6 %} data-more hidden{% endif %}>
+      <summary class="edition-row">
+        <span class="caret mono" aria-hidden="true"></span>
+        <span class="edition-date">{{ (e.sent_at|when).split(",")[0] }}{% if e.volume > 1 %} · vol. {{ e.volume }}{% endif %}</span>
+        <span class="mono small">{{ e.article_count }} art.</span>
+        <span class="mono small">{{ "{:,}".format(e.total_words) }} words</span>
+        <span class="mono small">{% if e.mailed %}emailed {{ e.mailed }}{% endif %}</span>
+        {% if e.status != "sent" %}<span class="chip mono">{{ e.status }}</span>
+        {% elif e.mail_failed %}<span class="chip chip-alert mono">{{ e.mail_failed }} email failed</span>{% endif %}
+      </summary>
+      <div class="edition-body">
+        {% if e.articles %}
+        <ol>
+          {% for a in e.articles %}
+          <li>{% if a.url %}<a href="{{ a.url }}">{{ a.title }}</a>{% else %}{{ a.title }}{% endif %} <span class="mono small muted">{{ a.url|domain }} · {{ "{:,}".format(a.words) }}</span></li>
+          {% endfor %}
+        </ol>
+        {% endif %}
+        {% if e.status == "sent" %}
+        <p class="mono small"><a href="/digests/{{ e.id }}/epub">↓ EPUB</a> · <a href="/issues/{{ e.id }}/full" target="_blank">email: full</a> · <a href="/issues/{{ e.id }}/teaser" target="_blank">email: teaser</a></p>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  {% if editions|length > 6 %}<button type="button" class="btn btn-sm" data-more-toggle data-label="Show older editions">Show older editions</button>{% endif %}
+  {% else %}<p class="muted">No editions yet.</p>{% endif %}
+</section>
+
+<section id="readers" class="two-col">
+  <div id="subscribers">
+    <div class="sec-head"><h2 class="h2">Subscribers</h2></div>
+    {% if sub_flash == "added" %}<div class="flash">Added {{ sub_flash_detail }}.</div>
+    {% elif sub_flash == "exists" %}<div class="flash flash-warn">{{ sub_flash_detail }} is already subscribed.</div>
+    {% elif sub_flash == "invalid" %}<div class="flash flash-warn">Invalid subscriber{% if sub_flash_detail %}: {{ sub_flash_detail }}{% endif %}.</div>
+    {% elif sub_flash in ("version", "sender", "pool") %}<div class="flash">{{ sub_flash_detail }}.</div>
+    {% elif sub_flash == "removed" %}<div class="flash">Removed {{ sub_flash_detail }}.</div>
+    {% elif sub_flash == "sent" %}<div class="flash">Latest issue sent to {{ sub_flash_detail }}.</div>
+    {% elif sub_flash == "send_failed" %}<div class="flash flash-warn">Send failed: {{ sub_flash_detail }}</div>
+    {% elif sub_flash == "nothing" %}<div class="flash flash-warn">No shared issue yet.</div>
+    {% endif %}
+
     {% for s in subscribers %}
-      <tr class="{{ '' if s.active else 'inactive' }}">
-        <td>{{ s.name or "—" }}</td>
-        <td>{{ s.email }}</td>
-        <td>
-          <form method="post" action="/subscribers/{{ s.id }}/version" class="inline">
-            <select name="version" class="version-select" onchange="this.form.submit()">
+    <div class="card{% if not s.active %} inactive{% endif %}">
+      <div class="card-top">
+        <span class="card-name">{{ s.name or s.email }}</span>
+        <span class="mono small">{{ s.format }}{% if not s.active %} · paused{% endif %}</span>
+      </div>
+      <p class="mono small">{{ s.email }}</p>
+      <p class="mono small">
+        {% if s.last %}<span{% if s.last.error %} title="{{ s.last.error }}"{% endif %}>{{ s.last.status }} {{ s.last.sent_at|when }}</span>{% else %}never sent{% endif %}
+        · links → {% if s.to_pool %}pool{% else %}library only{% endif %}
+      </p>
+      <div class="card-actions">
+        <form method="post" action="/subscribers/{{ s.id }}/send-latest"><button type="submit" class="btn btn-sm"{% if not latest_issue %} disabled{% endif %}>Send latest</button></form>
+        <form method="post" action="/subscribers/{{ s.id }}/toggle"><button type="submit" class="btn btn-sm">{{ "Pause" if s.active else "Resume" }}</button></form>
+      </div>
+      <details class="card-edit">
+        <summary class="mono small">Edit</summary>
+        <div class="edit-grid">
+          <form method="post" action="/subscribers/{{ s.id }}/version">
+            <label class="mono small" for="ver-{{ s.id }}">Version</label>
+            <select id="ver-{{ s.id }}" name="version" onchange="this.form.submit()">
               {% for c in subscription_choices %}<option value="{{ c }}"{% if c == s.format %} selected{% endif %}>{{ c }}</option>{% endfor %}
             </select>
-          </form>{% if not s.active %} <span class="no-data">(paused)</span>{% endif %}
-        </td>
-        <td>
-          {% if s.last %}
-            <span class="status-{{ s.last.status }}" {% if s.last.error %}title="{{ s.last.error }}"{% endif %}>{{ s.last.status }}</span>
-            <span class="ts">{{ s.last.sent_at|when }}</span>
-          {% else %}<span class="no-data">never</span>{% endif %}
-        </td>
-        <td class="sub-links">
-          <form method="post" action="/subscribers/{{ s.id }}/sender" class="inline">
-            <input type="text" name="sender_name" value="{{ s.sender_name or '' }}" placeholder="Reader sender name"
-                   class="sender-input" title="Display name Reader shows as the email's author" onchange="this.form.submit()">
           </form>
-          <form method="post" action="/subscribers/{{ s.id }}/pool" class="inline">
-            <label class="pool-toggle" title="Saved tagged {{ s.tag }}{% if s.to_pool %} + {{ trigger_tag }} (Morning Paper pool){% else %} only (library, not the pool){% endif %}">
+          <form method="post" action="/subscribers/{{ s.id }}/sender">
+            <label class="mono small" for="snd-{{ s.id }}">Reader sender name</label>
+            <input id="snd-{{ s.id }}" type="text" name="sender_name" value="{{ s.sender_name or '' }}" placeholder="as Reader shows the email's author" onchange="this.form.submit()">
+          </form>
+          <form method="post" action="/subscribers/{{ s.id }}/pool">
+            <label class="check mono small">
               <input type="checkbox" name="to_pool" value="1"{% if s.to_pool %} checked{% endif %} onchange="this.form.submit()">
-              <code>{{ s.tag }}</code>{% if s.to_pool %} + <code>{{ trigger_tag }}</code>{% endif %}
+              links join the pool (tagged <code>{{ s.tag }}</code>{% if s.to_pool %} + <code>{{ trigger_tag }}</code>{% endif %})
             </label>
           </form>
-        </td>
-        <td class="sub-actions">
-          <form method="post" action="/subscribers/{{ s.id }}/send-latest" class="inline">
-            <button type="submit" class="btn-small"{% if not latest_issue %} disabled{% endif %} title="Send the latest shared issue now">Send latest</button>
+          <form method="post" action="/subscribers/{{ s.id }}/delete" onsubmit="return confirm({{ ('Remove ' ~ s.email ~ '?')|tojson }})">
+            <button type="submit" class="btn btn-sm btn-danger">Remove</button>
           </form>
-          <form method="post" action="/subscribers/{{ s.id }}/toggle" class="inline">
-            <button type="submit" class="btn-small btn-grey">{{ "Pause" if s.active else "Resume" }}</button>
-          </form>
-          <form method="post" action="/subscribers/{{ s.id }}/delete" class="inline"
-                onsubmit="return confirm({{ ('Remove ' ~ s.email ~ '?')|tojson }})">
-            <button type="submit" class="book-delete" title="Remove">×</button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="no-data">no subscribers yet</p>
-  {% endif %}
-
-  <form method="post" action="/subscribers" class="settings-form sub-add">
-    <input type="text" name="name" placeholder="Name">
-    <input type="email" name="email" placeholder="email@example.com" required>
-    <select name="version">
-      {% for c in subscription_choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
-    </select>
-    <input type="text" name="sender_name" placeholder="Reader sender name">
-    <label class="pool-toggle"><input type="checkbox" name="to_pool" value="1"> links to pool</label>
-    <button type="submit">Add</button>
-  </form>
-
-  <details class="deliveries">
-    <summary>Recent deliveries ({{ deliveries|length }})</summary>
-    {% if deliveries %}
-    <table>
-      <thead><tr><th>When</th><th>To</th><th>Issue</th><th>Version</th><th>Status</th><th>Size</th></tr></thead>
-      <tbody>
-      {% for d in deliveries %}
-        <tr>
-          <td class="ts">{{ d.sent_at|when }}</td>
-          <td>{{ d.email }}</td>
-          <td class="ts">{{ d.issue_date }}{% if d.volume > 1 %} v{{ d.volume }}{% endif %}</td>
-          <td><a href="/issues/{{ d.digest_id }}/{{ d.format }}" target="_blank">{{ d.format }}</a></td>
-          <td class="status-{{ d.status }}">{{ d.status }}{% if d.manual %} <span class="no-data">(manual)</span>{% endif %}{% if d.error %}<br><small class="error">{{ d.error }}</small>{% endif %}</td>
-          <td>{{ d.size_bytes|human_size if d.size_bytes else "—" }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-    {% else %}<p class="no-data">no deliveries yet</p>{% endif %}
-  </details>
-  <p class="hint">"sent" means Proton SMTP accepted the message. Bounces land in the sender mailbox, not here.</p>
-</section>
-
-<dialog id="delete-dialog">
-  <p>Delete <strong id="delete-name"></strong>?</p>
-  <div class="dialog-actions">
-    <button type="button" onclick="document.getElementById('delete-dialog').close()">Cancel</button>
-    <form id="delete-form" method="post" style="display:inline">
-      <button type="submit" class="btn-danger">Delete</button>
-    </form>
-  </div>
-</dialog>
-
-<section class="summary">
-  <h2>Status</h2>
-  <dl>
-    <dt>Last digest</dt>
-    <dd>
-      {% if last_digest %}
-        <span class="ts">{{ last_digest[0]|when }}</span> · {{ last_digest[1] }} article{{ "s" if last_digest[1] != 1 else "" }} · {{ "{:,}".format(last_digest[3]) }} words{% if last_digest[2] > 1 %} · Vol. {{ last_digest[2] }}{% endif %}
-      {% else %}
-        <em class="no-data">no data yet</em>
-      {% endif %}
-    </dd>
-
-    <dt>Next run</dt>
-    <dd>
-      {% if paused %}
-        <span class="error">paused</span>
-      {% elif next_run %}
-        <span class="ts">{{ next_run|when }}</span>
-      {% else %}
-        <em class="no-data">not scheduled</em>
-      {% endif %}
-    </dd>
-
-    <dt>Queue</dt>
-    <dd>
-      {% if queue_stats is not none %}
-        {{ queue_stats.count }} article{{ "s" if queue_stats.count != 1 else "" }}, ~{{ "{:,}".format(queue_stats.total_words) }} words
-      {% else %}
-        <span class="error">unavailable</span>{% if queue_error %} <small class="error">({{ queue_error }})</small>{% endif %}
-      {% endif %}
-    </dd>
-
-    <dt>Total sent</dt>
-    <dd>{{ "{:,}".format(totals.articles) }} article{{ "s" if totals.articles != 1 else "" }}, {{ "{:,}".format(totals.words) }} words across {{ totals.digests }} digest{{ "s" if totals.digests != 1 else "" }}</dd>
-  </dl>
-</section>
-
-<section class="chart-section">
-  <h2>Words per day, last 30 days</h2>
-  <canvas id="chart" height="120"></canvas>
-</section>
-
-<section>
-  <h2>Recent digests</h2>
-  {% if digests %}
-  <table>
-    <thead><tr><th>Date</th><th>Vol</th><th>Articles</th><th>Words</th><th>Status</th></tr></thead>
-    <tbody>
-    {% for d in digests %}
-      <tr{% if loop.index > 5 %} class="more" hidden{% endif %}>
-        <td class="ts">{{ d.sent_at|when }}</td>
-        <td>{{ d.volume }}</td>
-        <td>{{ d.article_count }}</td>
-        <td>{{ "{:,}".format(d.total_words) }}</td>
-        <td class="status-{{ d.status }}">{{ d.status }}{% if d.status == 'sent' %} <a href="/digests/{{ d.id }}/epub" style="font-size:.85em;margin-left:.5em;color:var(--muted)">↓ epub</a>{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if digests|length > 5 %}<button type="button" class="show-more" onclick="toggleMore(this)" data-more="Show {{ digests|length - 5 }} more">Show {{ digests|length - 5 }} more</button>{% endif %}
-  {% else %}<p class="no-data">no data yet</p>{% endif %}
-</section>
-
-<section>
-  <h2>Recent runs</h2>
-  {% if runs %}
-  <table>
-    <thead><tr><th>Started</th><th>Outcome</th><th>Duration</th><th>Log</th></tr></thead>
-    <tbody>
-    {% for r in runs %}
-      <tr{% if loop.index > 5 %} class="more" hidden{% endif %}>
-        <td class="ts">{{ r.started_at|when }}</td>
-        <td class="status-{{ r.outcome }}">{{ r.outcome }}</td>
-        <td class="ts">{% if r.duration is not none %}{{ "%.1f"|format(r.duration) }}s{% else %}—{% endif %}</td>
-        <td>{% if r.log %}<details><summary>▸</summary><pre>{{ r.log }}</pre></details>{% else %}—{% endif %}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if runs|length > 5 %}<button type="button" class="show-more" onclick="toggleMore(this)" data-more="Show {{ runs|length - 5 }} more">Show {{ runs|length - 5 }} more</button>{% endif %}
-  {% else %}<p class="no-data">no data yet</p>{% endif %}
-</section>
-
-<section>
-  <h2>Recently sent articles</h2>
-  {% if articles %}
-  <table>
-    <thead><tr><th>Title</th><th>Source</th><th>Words</th><th>Sent</th></tr></thead>
-    <tbody>
-    {% for a in articles %}
-      <tr{% if loop.index > 5 %} class="more" hidden{% endif %}>
-        <td>{% if a.url %}<a href="{{ a.url }}">{{ a.title }}</a>{% else %}{{ a.title }}{% endif %}</td>
-        <td>{{ a.url|domain }}</td>
-        <td>{{ "{:,}".format(a.word_count) }}</td>
-        <td class="ts">{{ a.sent_at|when }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if articles|length > 5 %}<button type="button" class="show-more" onclick="toggleMore(this)" data-more="Show {{ articles|length - 5 }} more">Show {{ articles|length - 5 }} more</button>{% endif %}
-  {% else %}<p class="no-data">no data yet</p>{% endif %}
-</section>
-
-{% if intake_enabled %}
-<section id="intake">
-  <h2>Links from friends</h2>
-  {% if intake_flash == "ok" %}<div class="flash flash-info">Checking Reader for new link emails — refresh in a minute.</div>
-  {% elif intake_flash == "already_running" %}<div class="flash flash-warn">A check is already in progress.</div>{% endif %}
-  <form method="post" action="/intake/run" class="inline"><button type="submit">Check now</button></form>
-  {% if intake_links %}
-  <table>
-    <thead><tr><th>Link</th><th>From</th><th>Status</th><th>Saved</th></tr></thead>
-    <tbody>
-    {% for l in intake_links %}
-      <tr{% if loop.index > 5 %} class="more" hidden{% endif %}>
-        <td><a href="{{ l.url }}">{{ l.url|domain }}</a></td>
-        <td>{{ l.sender_tag }}</td>
-        <td{% if l.error %} title="{{ l.error }}"{% endif %}>{{ l.status }}</td>
-        <td class="ts">{{ l.saved_at|when }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% if intake_links|length > 5 %}<button type="button" class="show-more" onclick="toggleMore(this)" data-more="Show {{ intake_links|length - 5 }} more">Show {{ intake_links|length - 5 }} more</button>{% endif %}
-  {% else %}<p class="no-data">no links yet</p>{% endif %}
-</section>
-{% endif %}
-
-<section class="settings" id="settings">
-  <h2>Settings</h2>
-  {% if settings_flash == "ok" %}<div class="flash flash-info">Settings saved.</div>
-  {% elif settings_flash == "invalid" %}<div class="flash flash-warn">Not saved: {{ settings_detail }}.</div>
-  {% endif %}
-  <form method="post" action="/settings" class="settings-grid" id="settings-form" data-anchor="{{ sched.anchor.isoformat() }}">
-    <span class="settings-label">Send on</span>
-    <div class="settings-field">
-      <div class="sched-row">
-        <div class="day-chips" role="group" aria-label="Days of the week">
-          {% for i in range(7) %}
-          <label class="day-chip" title="{{ weekday_names[i] }}">
-            <input type="checkbox" name="days" value="{{ i }}"{% if i in sched.days %} checked{% endif %}>
-            <span aria-hidden="true">{{ "MTWTFSS"[i] }}</span><span class="sr-only">{{ weekday_names[i] }}</span>
-          </label>
-          {% endfor %}
         </div>
-        <span class="muted">at</span>
-        <input type="time" name="time" value="{{ sched.time_str }}" required aria-label="Time">
-      </div>
-      <div class="presets">
-        <button type="button" class="link-btn" data-days="0,1,2,3,4,5,6">Every day</button>
-        <button type="button" class="link-btn" data-days="0,1,2,3,4">Weekdays</button>
-        <button type="button" class="link-btn" data-days="5,6">Weekends</button>
-      </div>
-      <div class="sched-row">
-        <label for="weeks" class="muted">Repeat every</label>
-        <input type="number" id="weeks" name="weeks" min="1" max="{{ weeks_max }}" value="{{ sched.weeks }}" class="num-small">
-        <span class="muted" id="weeks-word">week{{ "s" if sched.weeks != 1 }}</span>
-        <span class="start-group" id="start-group"{% if sched.weeks == 1 %} hidden{% endif %}>
-          <span class="muted">starting</span>
-          <span class="segmented" role="group" aria-label="First week">
-            <label><input type="radio" name="start" value="this"{% if sched.weeks > 1 and this_week_on %} checked{% endif %}><span>this week</span></label>
-            <label><input type="radio" name="start" value="next"{% if sched.weeks > 1 and next_week_on and not this_week_on %} checked{% endif %}><span>next week</span></label>
-          </span>
-        </span>
-      </div>
-      <p class="hint" id="sched-summary">{{ sched_summary }}{% if sched_upcoming %} · next <span class="ts">{{ sched_upcoming[0]|when }}</span>{% if sched_upcoming|length > 1 %}, then <span class="ts">{{ sched_upcoming[1]|when }}</span>{% endif %}{% endif %}</p>
+      </details>
     </div>
+    {% else %}
+    <p class="muted">No subscribers yet.</p>
+    {% endfor %}
 
-    <label for="word_budget" class="settings-label">Word budget per digest</label>
-    <div class="settings-field">
-      <div class="sched-row">
-        <input type="number" id="word_budget" name="word_budget" value="{{ word_budget }}" min="{{ wb_min }}" max="{{ wb_max }}" required>
-        <span class="muted">words</span>
-      </div>
-      <p class="hint">Soft cap: the digest stops after the article that pushes the total past it.</p>
-    </div>
+    <details class="add-reader"{% if sub_flash in ("invalid", "exists") %} open{% endif %}>
+      <summary class="btn btn-sm">+ Add a reader</summary>
+      <form method="post" action="/subscribers" class="edit-grid">
+        <label class="mono small" for="new-name">Name</label>
+        <input id="new-name" type="text" name="name">
+        <label class="mono small" for="new-email">Email</label>
+        <input id="new-email" type="email" name="email" placeholder="email@example.com" required>
+        <label class="mono small" for="new-version">Version</label>
+        <select id="new-version" name="version">{% for c in subscription_choices %}<option value="{{ c }}">{{ c }}</option>{% endfor %}</select>
+        <label class="mono small" for="new-sender">Reader sender name</label>
+        <input id="new-sender" type="text" name="sender_name">
+        <label class="check mono small"><input type="checkbox" name="to_pool" value="1"> their links join the pool</label>
+        <button type="submit" class="btn btn-solid">Add</button>
+      </form>
+    </details>
 
-    <span></span>
-    <div class="settings-field sched-row">
-      <button type="submit">Save</button>
-      <span class="hint">Pause and Trigger in the header still work as before.</span>
+    <details class="deliveries">
+      <summary class="mono small">Recent deliveries ({{ deliveries|length }})</summary>
+      {% for d in deliveries %}
+      <div class="row mono small">
+        <span>{{ d.sent_at|when }}</span>
+        <span>{{ d.email }}</span>
+        <a href="/issues/{{ d.digest_id }}/{{ d.format }}" target="_blank">{{ d.format }}</a>
+        <span{% if d.status != "sent" %} class="chip chip-alert"{% endif %}{% if d.error %} title="{{ d.error }}"{% endif %}>{{ d.status }}{% if d.manual %} · manual{% endif %}</span>
+      </div>
+      {% else %}<p class="muted small">No deliveries yet.</p>{% endfor %}
+      <p class="muted small">"sent" means Proton SMTP accepted the message. Bounces land in the sender mailbox.</p>
+    </details>
+  </div>
+
+  <div id="intake">
+    <div class="sec-head">
+      <h2 class="h2">Sent by readers</h2>
+      {% if intake_enabled %}<form method="post" action="/intake/run"><button type="submit" class="btn btn-sm">Check mail</button></form>{% endif %}
     </div>
-  </form>
+    {% if intake_flash == "ok" %}<div class="flash">Checking Reader for new link emails. Refresh in a minute.</div>
+    {% elif intake_flash == "already_running" %}<div class="flash flash-warn">A check is already in progress.</div>{% endif %}
+    {% if links %}
+    <div data-more-list>
+      {% for l in links %}
+      <div class="link-row"{% if loop.index > 8 %} data-more hidden{% endif %}>
+        <span class="link-main"><a href="{{ l.url }}">{{ l.title or l.url|domain }}</a><br><span class="mono small muted">{{ l.url|domain }} · from {{ l.sender_tag }} · {{ (l.saved_at|when).split(",")[0] }}</span></span>
+        <span class="chip mono{% if l.state == 'failed' %} chip-alert{% endif %}"{% if l.error %} title="{{ l.error }}"{% endif %}>{{ l.state }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% if links|length > 8 %}<button type="button" class="btn btn-sm" data-more-toggle data-label="Show more">Show more</button>{% endif %}
+    {% else %}<p class="muted">No links yet.</p>{% endif %}
+  </div>
 </section>
 
-<script id="chart-data" type="application/json">{{ chart_data|tojson }}</script>
+<section id="press" class="two-col">
+  <div id="settings">
+    <div class="sec-head"><h2 class="h2">Press room</h2></div>
+    {% if settings_flash == "ok" %}<div class="flash">Settings saved.</div>
+    {% elif settings_flash == "invalid" %}<div class="flash flash-warn">Not saved: {{ settings_detail }}.</div>{% endif %}
+    <dl class="facts">
+      <dt class="kicker">Prints</dt><dd>{{ sched_summary }}</dd>
+      <dt class="kicker">Budget</dt><dd>{{ "{:,}".format(word_budget) }} words, soft cap</dd>
+      <dt class="kicker">Emails</dt><dd>{{ share_mode }}</dd>
+      <dt class="kicker">Pool tag</dt><dd><code>{{ trigger_tag }}</code></dd>
+    </dl>
+    <details class="settings-edit"{% if settings_flash == "invalid" %} open{% endif %}>
+      <summary class="btn btn-sm">Edit schedule and budget</summary>
+      <form method="post" action="/settings" class="settings-grid" id="settings-form" data-anchor="{{ sched.anchor.isoformat() }}">
+        <span class="settings-label">Send on</span>
+        <div class="settings-field">
+          <div class="sched-row">
+            <div class="day-chips" role="group" aria-label="Days of the week">
+              {% for i in range(7) %}
+              <label class="day-chip" title="{{ weekday_names[i] }}">
+                <input type="checkbox" name="days" value="{{ i }}"{% if i in sched.days %} checked{% endif %}>
+                <span aria-hidden="true">{{ "MTWTFSS"[i] }}</span><span class="sr-only">{{ weekday_names[i] }}</span>
+              </label>
+              {% endfor %}
+            </div>
+            <span class="muted">at</span>
+            <input type="time" name="time" value="{{ sched.time_str }}" required aria-label="Time">
+          </div>
+          <div class="presets">
+            <button type="button" class="link-btn" data-days="0,1,2,3,4,5,6">Every day</button>
+            <button type="button" class="link-btn" data-days="0,1,2,3,4">Weekdays</button>
+            <button type="button" class="link-btn" data-days="5,6">Weekends</button>
+          </div>
+          <div class="sched-row">
+            <label for="weeks" class="muted">Repeat every</label>
+            <input type="number" id="weeks" name="weeks" min="1" max="{{ weeks_max }}" value="{{ sched.weeks }}" class="num-small">
+            <span class="muted" id="weeks-word">week{{ "s" if sched.weeks != 1 }}</span>
+            <span class="start-group" id="start-group"{% if sched.weeks == 1 %} hidden{% endif %}>
+              <span class="muted">starting</span>
+              <span class="segmented" role="group" aria-label="First week">
+                <label><input type="radio" name="start" value="this"{% if sched.weeks > 1 and this_week_on %} checked{% endif %}><span>this week</span></label>
+                <label><input type="radio" name="start" value="next"{% if sched.weeks > 1 and next_week_on and not this_week_on %} checked{% endif %}><span>next week</span></label>
+              </span>
+            </span>
+          </div>
+          <p class="hint" id="sched-summary">{{ sched_summary }}{% if sched_upcoming %} · next <span class="mono">{{ sched_upcoming[0]|when }}</span>{% if sched_upcoming|length > 1 %}, then <span class="mono">{{ sched_upcoming[1]|when }}</span>{% endif %}{% endif %}</p>
+        </div>
+
+        <label for="word_budget" class="settings-label">Word budget</label>
+        <div class="settings-field">
+          <div class="sched-row">
+            <input type="number" id="word_budget" name="word_budget" value="{{ word_budget }}" min="{{ wb_min }}" max="{{ wb_max }}" required>
+            <span class="muted">words</span>
+          </div>
+          <p class="hint">Soft cap: the issue stops after the article that pushes the total past it.</p>
+        </div>
+
+        <span></span>
+        <div class="settings-field"><div class="sched-row"><button type="submit" class="btn btn-solid">Save</button></div></div>
+      </form>
+    </details>
+  </div>
+
+  <div>
+    <div class="sec-head"><h2 class="h2">Run log</h2></div>
+    {% if runs %}
+    <div data-more-list>
+      {% for r in runs %}
+      <details class="run"{% if loop.index > 6 %} data-more hidden{% endif %}>
+        <summary class="row mono small">
+          <span>{{ r.started_at|when }}</span>
+          <span class="{% if r.outcome in ('error', 'missed') %}chip chip-alert{% endif %}">{{ r.outcome }}</span>
+          <span class="muted">{% if r.duration is not none %}{{ "%.1f"|format(r.duration) }}s{% else %}—{% endif %}</span>
+          <span class="muted">{% if r.log %}log{% endif %}</span>
+        </summary>
+        {% if r.log %}<pre>{{ r.log }}</pre>{% endif %}
+      </details>
+      {% endfor %}
+    </div>
+    {% if runs|length > 6 %}<button type="button" class="btn btn-sm" data-more-toggle data-label="Show more">Show more</button>{% endif %}
+    {% else %}<p class="muted">No runs yet.</p>{% endif %}
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script id="chart-weeks" type="application/json">{{ chart_weeks_json|tojson }}</script>
 <script>
-  const data = JSON.parse(document.getElementById('chart-data').textContent);
-  new Chart(document.getElementById('chart'), {
-    type: 'bar',
-    data: {
-      labels: data.map(d => d.day.slice(5)),
-      datasets: [{ data: data.map(d => d.words), backgroundColor: '#4a8' }]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: (items) => data[items[0].dataIndex].day,
-            label: (item) => {
-              const d = data[item.dataIndex];
-              return d.n + ' article' + (d.n !== 1 ? 's' : '');
-            }
-          }
-        }
-      },
-      scales: { y: { beginAtZero: true } }
-    }
-  });
+(function () {
+  const weeks = JSON.parse(document.getElementById('chart-weeks').textContent);
+  const chart = document.getElementById('chart');
+  const readout = document.getElementById('readout');
+  const sel = chart.querySelector('.cumul-sel');
+  const viewW = {{ chart.view_w }};
+  const fmt = (n) => n.toLocaleString('en-US');
+  let current = weeks.length - 1;
+  while (current > 0 && !weeks[current].n) current--;
 
-  (function () {
-    const form = document.getElementById('settings-form');
-    if (!form) return;
-    const FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    const SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const savedAnchor = new Date(form.dataset.anchor + 'T00:00:00');
-    const monday = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
-
-    function describe(days, t, weeks) {
-      const key = days.join(',');
-      if (days.length === 1) {
-        if (weeks === 1) return 'Every ' + FULL[days[0]] + ' at ' + t;
-        if (weeks === 2) return 'Every other ' + FULL[days[0]] + ' at ' + t;
-        return FULL[days[0]] + ' every ' + weeks + ' weeks at ' + t;
-      }
-      let base = days.length === 7 ? 'Every day at ' + t
-        : key === '0,1,2,3,4' ? 'Weekdays at ' + t
-        : key === '5,6' ? 'Weekends at ' + t
-        : days.map((i) => SHORT[i]).join(', ') + ' at ' + t;
-      if (weeks === 1) return base;
-      return base + (weeks === 2 ? ', every other week' : ', every ' + weeks + ' weeks');
-    }
-
-    function runs(days, t, weeks, anchor, count) {
-      const [h, m] = t.split(':').map(Number);
-      const now = new Date();
-      const out = [];
-      for (let i = 0; i < 7 * weeks * count + 14 && out.length < count; i++) {
-        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m);
-        const offset = Math.round((monday(d) - anchor) / 604800000);
-        if (days.includes((d.getDay() + 6) % 7) && offset >= 0 && offset % weeks === 0 && d > now) out.push(d);
-      }
-      return out;
-    }
-
-    const fmt = (d) => SHORT[(d.getDay() + 6) % 7] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ', '
-      + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
-
-    function update() {
-      const days = [...form.querySelectorAll('input[name=days]:checked')].map((x) => Number(x.value)).sort();
-      const t = form.time.value || '00:00';
-      const weeks = Math.max(1, Math.min(8, parseInt(form.weeks.value, 10) || 1));
-      document.getElementById('start-group').hidden = weeks === 1;
-      document.getElementById('weeks-word').textContent = weeks === 1 ? 'week' : 'weeks';
-      const summary = document.getElementById('sched-summary');
-      if (!days.length) {
-        summary.textContent = 'Pick at least one day. To stop scheduled runs, use Pause.';
-        summary.classList.add('error');
-        return;
-      }
-      summary.classList.remove('error');
-      const start = form.querySelector('input[name=start]:checked');
-      let anchor = savedAnchor;
-      if (weeks === 1 || (start && start.value === 'this')) anchor = monday(new Date());
-      else if (start && start.value === 'next') { anchor = monday(new Date()); anchor.setDate(anchor.getDate() + 7); }
-      const r = runs(days, t, weeks, anchor, 2);
-      summary.textContent = describe(days, t, weeks)
-        + (r[0] ? ' · next ' + fmt(r[0]) : '') + (r[1] ? ', then ' + fmt(r[1]) : '');
-    }
-
-    form.querySelectorAll('[data-days]').forEach((btn) => btn.addEventListener('click', () => {
-      const want = btn.dataset.days.split(',');
-      form.querySelectorAll('input[name=days]').forEach((x) => { x.checked = want.includes(x.value); });
-      update();
-    }));
-    form.addEventListener('input', update);
-    form.addEventListener('change', update);
-  })();
-
-  function toggleMore(btn) {
-    const rows = btn.previousElementSibling.querySelectorAll('tr.more');
-    const opening = rows.length && rows[0].hidden;
-    rows.forEach(r => { r.hidden = !opening; });
-    btn.textContent = opening ? 'Show less' : btn.dataset.more;
+  function select(i) {
+    current = i;
+    const w = weeks[i];
+    const parts = ['week of ' + w.full, fmt(w.words) + ' words', w.n + ' article' + (w.n === 1 ? '' : 's')];
+    if (w.avg) parts.push('avg ' + fmt(w.avg) + ' / article');
+    if (w.added !== null) parts.push('saved +' + fmt(w.added));
+    if (w.pool !== null) parts.push('pool ' + fmt(w.pool));
+    readout.textContent = parts.join(' · ');
+    chart.querySelectorAll('.bar').forEach((b) => b.classList.toggle('is-selected', Number(b.dataset.week) === i));
+    const x = weeks.length > 1 ? i / (weeks.length - 1) * viewW : 0;
+    sel.setAttribute('x1', x);
+    sel.setAttribute('x2', x);
   }
 
-  function confirmDelete(id, name) {
-    document.getElementById('delete-name').textContent = name;
-    document.getElementById('delete-form').action = '/library/' + id + '/delete';
-    document.getElementById('delete-dialog').showModal();
+  chart.querySelectorAll('[data-week]').forEach((el) => el.addEventListener('click', () => select(Number(el.dataset.week))));
+  chart.querySelectorAll('[data-view]').forEach((btn) => btn.addEventListener('click', () => {
+    const view = btn.dataset.view;
+    chart.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+    chart.querySelectorAll('[data-view-only]').forEach((el) => { el.hidden = el.dataset.viewOnly !== view; });
+    try { localStorage.setItem('kiosk-chart-view', view); } catch (e) {}
+  }));
+  try {
+    const saved = localStorage.getItem('kiosk-chart-view');
+    if (saved) chart.querySelector('[data-view="' + saved + '"]')?.click();
+  } catch (e) {}
+  select(current);
+
+  document.querySelectorAll('[data-more-toggle]').forEach((btn) => btn.addEventListener('click', () => {
+    const items = btn.previousElementSibling.querySelectorAll('[data-more]');
+    const opening = items.length && items[0].hidden;
+    items.forEach((el) => { el.hidden = !opening; });
+    btn.textContent = opening ? 'Show less' : btn.dataset.label;
+  }));
+})();
+
+(function () {
+  const form = document.getElementById('settings-form');
+  if (!form) return;
+  const FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  const SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const savedAnchor = new Date(form.dataset.anchor + 'T00:00:00');
+  const monday = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+
+  function describe(days, t, weeks) {
+    const key = days.join(',');
+    if (days.length === 1) {
+      if (weeks === 1) return 'Every ' + FULL[days[0]] + ' at ' + t;
+      if (weeks === 2) return 'Every other ' + FULL[days[0]] + ' at ' + t;
+      return FULL[days[0]] + ' every ' + weeks + ' weeks at ' + t;
+    }
+    let base = days.length === 7 ? 'Every day at ' + t
+      : key === '0,1,2,3,4' ? 'Weekdays at ' + t
+      : key === '5,6' ? 'Weekends at ' + t
+      : days.map((i) => SHORT[i]).join(', ') + ' at ' + t;
+    if (weeks === 1) return base;
+    return base + (weeks === 2 ? ', every other week' : ', every ' + weeks + ' weeks');
   }
 
-  setTimeout(() => {
-    document.querySelectorAll('#flashes .flash, .subscribers .flash, .settings .flash').forEach(el => {
-      el.style.transition = 'opacity .3s';
-      el.style.opacity = '0';
-      setTimeout(() => el.remove(), 300);
-    });
-  }, 5000);
+  function runs(days, t, weeks, anchor, count) {
+    const [h, m] = t.split(':').map(Number);
+    const now = new Date();
+    const out = [];
+    for (let i = 0; i < 7 * weeks * count + 14 && out.length < count; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m);
+      const offset = Math.round((monday(d) - anchor) / 604800000);
+      if (days.includes((d.getDay() + 6) % 7) && offset >= 0 && offset % weeks === 0 && d > now) out.push(d);
+    }
+    return out;
+  }
+
+  const fmt = (d) => SHORT[(d.getDay() + 6) % 7] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ', '
+    + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+
+  function update() {
+    const days = [...form.querySelectorAll('input[name=days]:checked')].map((x) => Number(x.value)).sort();
+    const t = form.time.value || '00:00';
+    const weeks = Math.max(1, Math.min(8, parseInt(form.weeks.value, 10) || 1));
+    document.getElementById('start-group').hidden = weeks === 1;
+    document.getElementById('weeks-word').textContent = weeks === 1 ? 'week' : 'weeks';
+    const summary = document.getElementById('sched-summary');
+    if (!days.length) {
+      summary.textContent = 'Pick at least one day. To stop scheduled runs, use Pause.';
+      summary.classList.add('error');
+      return;
+    }
+    summary.classList.remove('error');
+    const start = form.querySelector('input[name=start]:checked');
+    let anchor = savedAnchor;
+    if (weeks === 1 || (start && start.value === 'this')) anchor = monday(new Date());
+    else if (start && start.value === 'next') { anchor = monday(new Date()); anchor.setDate(anchor.getDate() + 7); }
+    const r = runs(days, t, weeks, anchor, 2);
+    summary.textContent = describe(days, t, weeks)
+      + (r[0] ? ' · next ' + fmt(r[0]) : '') + (r[1] ? ', then ' + fmt(r[1]) : '');
+  }
+
+  form.querySelectorAll('[data-days]').forEach((btn) => btn.addEventListener('click', () => {
+    const want = btn.dataset.days.split(',');
+    form.querySelectorAll('input[name=days]').forEach((x) => { x.checked = want.includes(x.value); });
+    update();
+  }));
+  form.addEventListener('input', update);
+  form.addEventListener('change', update);
+})();
+
+if (location.hash) {
+  const target = document.querySelector(location.hash);
+  if (target && target.tagName === 'DETAILS') target.open = true;
+}
 </script>
-
-</body>
-</html>
+{% endblock %}

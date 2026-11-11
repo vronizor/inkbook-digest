@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Kiosk{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400..700;1,7..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+</head>
+<body>
+<div class="shell">
+
+  <aside class="side">
+    <a href="/" class="brand">
+      <img src="/static/logo.svg" alt="" width="44" height="44">
+      <span>Kiosk</span>
+    </a>
+    <nav class="side-nav" aria-label="Pages">
+      <a href="/" class="nav-item"{% if page == "kiosk" %} aria-current="page"{% endif %}>Kiosk</a>
+      <a href="/#editions" class="nav-item nav-sub">Editions</a>
+      <a href="/#readers" class="nav-item nav-sub">Readers{% if failed_links %}<span class="mono small">{{ failed_links }} failed</span>{% endif %}</a>
+      <a href="/#press" class="nav-item nav-sub">Press room</a>
+      <a href="/library" class="nav-item nav-sep"{% if page == "library" %} aria-current="page"{% endif %}>Library<span class="mono small">{{ book_count }} book{{ "s" if book_count != 1 }}</span></a>
+    </nav>
+    <div class="side-status">
+      <p class="mono small">
+        {% if is_running %}● printing now
+        {% elif paused %}○ paused
+        {% elif next_run %}● scheduled<br>{{ next_run.isoformat()|when }}
+        {% else %}○ not scheduled{% endif %}
+      </p>
+      <div class="side-actions">
+        <form method="post" action="/pause"><button type="submit" class="btn">{% if paused %}Resume{% else %}Pause{% endif %}</button></form>
+        <form method="post" action="/trigger"><button type="submit" class="btn btn-solid"{% if is_running %} disabled{% endif %}>Send now</button></form>
+      </div>
+      <p class="mono small muted opds">OPDS · {{ opds_url }}</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    {% block main %}{% endblock %}
+  </main>
+
+</div>
+{% block scripts %}{% endblock %}
+<script>
+  setTimeout(() => {
+    document.querySelectorAll('.flash').forEach(el => {
+      el.style.transition = 'opacity .3s';
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 300);
+    });
+  }, 6000);
+</script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Library · Kiosk{% endblock %}
+{% block main %}
+
+<div id="flashes">
+{% for f in upload_flashes %}
+  {% if f.kind == "ok" %}<div class="flash">Uploaded: {{ f.name }}</div>
+  {% elif f.kind == "conflict" %}<div class="flash flash-warn">{{ f.name }} already exists. Rename and try again.</div>
+  {% elif f.kind == "invalid" %}<div class="flash flash-warn">{{ f.name }} rejected: {{ f.reason }}</div>
+  {% endif %}
+{% endfor %}
+{% if delete_flash %}<div class="flash">Deleted: {{ delete_flash }}</div>{% endif %}
+</div>
+
+<section class="lib-head">
+  <div>
+    <p class="hero-next">Library</p>
+    <p class="mono small muted">{{ books|length }} book{{ "s" if books|length != 1 }} · {{ total_bytes|human_size }} · shown on the InkBook under OPDS › Library</p>
+  </div>
+  <form method="post" action="/library/upload" enctype="multipart/form-data" id="upload-form">
+    <input type="file" name="files" id="upload-input" multiple accept=".epub,.pdf" required hidden>
+    <button type="button" class="btn btn-solid" onclick="document.getElementById('upload-input').click()">Upload EPUB / PDF</button>
+  </form>
+</section>
+
+<div class="dropzone" id="dropzone">Drop EPUB or PDF files here (up to {{ max_upload_mb }} MB each)</div>
+
+{% if books %}
+<div class="shelf">
+  {% for b in books %}
+  <div class="book">
+    {% if b.has_cover %}
+    <img class="book-cover" src="/opds/cover/library/{{ b.id }}" alt="">
+    {% else %}
+    <div class="book-cover book-plain" style="--cover-bg: {{ ['#111', '#555', '#DADAD4', '#F7F7F3'][loop.index0 % 4] }}; --cover-fg: {{ ['#EDEDE8', '#EDEDE8', '#111', '#111'][loop.index0 % 4] }}">
+      <span class="book-title">{{ b.title or b.filename }}</span>
+      <span class="book-author">{{ b.author or "" }}</span>
+    </div>
+    {% endif %}
+    <p class="book-name">{{ b.title or b.filename }}</p>
+    <p class="mono small muted">{{ b.author or "Unknown" }} · {{ b.format|upper }} · {{ b.size_bytes|human_size }} · {{ b.added_at[:10] }}</p>
+    <div class="card-actions">
+      <a class="btn btn-sm" href="/opds/file/library/{{ b.id }}">Download</a>
+      <button type="button" class="btn btn-sm" onclick="confirmDelete({{ b.id }}, {{ b.filename|tojson }})">Delete</button>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">No books yet.</p>
+{% endif %}
+
+<dialog id="delete-dialog">
+  <p>Delete <strong id="delete-name"></strong>?</p>
+  <div class="dialog-actions">
+    <button type="button" class="btn" onclick="document.getElementById('delete-dialog').close()">Cancel</button>
+    <form id="delete-form" method="post"><button type="submit" class="btn btn-danger">Delete</button></form>
+  </div>
+</dialog>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const input = document.getElementById('upload-input');
+  input.addEventListener('change', () => input.form.submit());
+
+  const zone = document.getElementById('dropzone');
+  ['dragenter', 'dragover'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('is-over'); }));
+  ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('is-over'); }));
+  zone.addEventListener('drop', (e) => {
+    if (!e.dataTransfer.files.length) return;
+    input.files = e.dataTransfer.files;
+    input.form.submit();
+  });
+
+  function confirmDelete(id, name) {
+    document.getElementById('delete-name').textContent = name;
+    document.getElementById('delete-form').action = '/library/' + id + '/delete';
+    document.getElementById('delete-dialog').showModal();
+  }
+</script>
+{% endblock %}
