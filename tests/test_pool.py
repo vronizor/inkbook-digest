@@ -88,6 +88,27 @@ class WeeklyTest(unittest.TestCase):
         self.assertEqual(len(view["read_pts"].split()), 3)
         self.assertEqual(len(view["saved_pts"].split()), 2)
 
+    def test_cumulative_gap_is_pool_growth(self):
+        rows = [
+            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": 160_000},
+            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 170_000},
+        ]
+        view = pool.chart_view(rows, 4000)
+        saved_first = view["saved_pts"].split()[0]
+        read_first = view["read_pts"].split()[0]
+        self.assertEqual(saved_first, read_first)
+        self.assertEqual(view["history_from"], "26 Oct")
+
+    def test_single_snapshot_does_not_set_scale(self):
+        rows = [
+            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": None},
+            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 160_000},
+        ]
+        view = pool.chart_view(rows, 4000)
+        self.assertFalse(view["has_pool_history"])
+        top_y = min(float(pt.split(",")[1]) for pt in view["read_pts"].split())
+        self.assertLess(top_y, pool.VIEW_H * 0.2)
+
     def test_average_issue_words_falls_back_to_budget(self):
         self.assertEqual(pool.average_issue_words(self.conn, 15_000), 15_000)
         self._digest("2026-11-07T06:30:00+00:00", [10_000, 8_000])

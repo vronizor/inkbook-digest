@@ -89,6 +89,8 @@ summary.btn::-webkit-details-marker { display: none; }
 .axis span { flex: 1; text-align: center; white-space: nowrap; }
 .axis-spread { justify-content: space-between; gap: 0; }
 .axis-spread span { flex: 0 0 0; width: 0; display: flex; justify-content: center; }
+.axis-spread span:first-child { justify-content: flex-start; }
+.axis-spread span:last-child { justify-content: flex-end; }
 .cumul { position: relative; height: 220px; margin-top: 22px; border-bottom: 1.5px solid var(--ink); }
 .cumul svg { width: 100%; height: 220px; display: block; }
 .cumul-gap { fill: var(--gap); }

@@ -154,13 +154,18 @@ def chart_view(rows: list[dict], budget: int) -> dict:
     for r in rows:
         total += r["words"]
         read_cum.append(total)
-    saved_cum = [rc + r["pool"] if r["pool"] is not None else None for rc, r in zip(read_cum, rows)]
-    cum_top = max([v for v in saved_cum if v is not None] + read_cum + [1]) * 1.08
+    known = [i for i, r in enumerate(rows) if r["pool"] is not None]
+    base = rows[known[0]]["pool"] if known else 0
+    saved_cum = [rc + r["pool"] - base if r["pool"] is not None else None for rc, r in zip(read_cum, rows)]
+    has_history = len(known) > 1
+    plotted = read_cum + ([saved_cum[i] for i in known] if has_history else [])
+    lo = min(plotted + [0])
+    hi = max(plotted + [1]) * 1.08
+    span = hi - lo or 1
 
     def y(v: float) -> float:
-        return round(VIEW_H - v / cum_top * VIEW_H, 1)
+        return round(VIEW_H - (v - lo) / span * VIEW_H, 1)
 
-    known = [i for i, v in enumerate(saved_cum) if v is not None]
     saved_pts = " ".join(f"{xs[i]},{y(saved_cum[i])}" for i in known)
     read_pts = " ".join(f"{xs[i]},{y(v)}" for i, v in enumerate(read_cum))
     gap_pts = saved_pts + " " + " ".join(f"{xs[i]},{y(read_cum[i])}" for i in reversed(known))
@@ -183,9 +188,10 @@ def chart_view(rows: list[dict], budget: int) -> dict:
         "weeks": weeks,
         "budget_pct": round(budget / top * 100, 1),
         "budget_k": approx_words(budget),
-        "saved_pts": saved_pts if len(known) > 1 else "",
-        "gap_pts": gap_pts if len(known) > 1 else "",
+        "saved_pts": saved_pts if has_history else "",
+        "gap_pts": gap_pts if has_history else "",
         "read_pts": read_pts,
-        "has_pool_history": len(known) > 1,
+        "has_pool_history": has_history,
+        "history_from": f"{rows[known[0]]['monday'].day} {rows[known[0]]['monday']:%b}" if known else "",
         "view_w": VIEW_W, "view_h": VIEW_H,
     }

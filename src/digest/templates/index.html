@@ -22,9 +22,9 @@
   <div class="chart-head">
     <div>
       <h2 class="h2" data-view-only="weekly">How much I read</h2>
-      <h2 class="h2" data-view-only="cumul" hidden>Saved vs read</h2>
+      <h2 class="h2" data-view-only="cumul" hidden>Added vs read</h2>
       <p class="mono small muted" data-view-only="weekly">words per week · number in the bar = articles</p>
-      <p class="mono small muted" data-view-only="cumul" hidden>running totals · the shaded gap is the pool</p>
+      <p class="mono small muted" data-view-only="cumul" hidden>running totals{% if chart.has_pool_history %} since {{ chart.history_from }} · the shaded gap is how much the pool grew{% endif %}</p>
     </div>
     <div class="seg" role="group" aria-label="Chart view">
       <button type="button" data-view="weekly" aria-pressed="true">Weekly</button>
@@ -48,7 +48,7 @@
 
   <div data-view-only="cumul" hidden>
     <div class="cumul">
-      <svg viewBox="0 0 {{ chart.view_w }} {{ chart.view_h }}" preserveAspectRatio="none" role="img" aria-label="Cumulative words saved and read; the gap between the lines is the pool">
+      <svg viewBox="0 0 {{ chart.view_w }} {{ chart.view_h }}" preserveAspectRatio="none" role="img" aria-label="Cumulative words added to the pool and read; the gap is how much the pool grew">
         {% if chart.has_pool_history %}
         <polygon points="{{ chart.gap_pts }}" class="cumul-gap"></polygon>
         <polyline points="{{ chart.saved_pts }}" class="cumul-saved"></polyline>
@@ -61,13 +61,13 @@
       </div>
     </div>
     <div class="axis axis-spread mono">{% for w in chart.weeks %}<span>{{ w.label }}</span>{% endfor %}</div>
-    <div class="legend mono small">
-      <span><i class="lg-saved"></i>saved to pool</span>
+    {% if chart.has_pool_history %}<div class="legend mono small">
+      <span><i class="lg-saved"></i>added to pool</span>
       <span><i class="lg-read"></i>read</span>
-      <span><i class="lg-gap"></i>gap = pool</span>
-    </div>
+      <span><i class="lg-gap"></i>gap = pool growth</span>
+    </div>{% endif %}
     {% if not chart.has_pool_history %}
-    <p class="mono small muted">The saved line appears once two weeks of pool snapshots exist (one is taken every day).</p>
+    <p class="mono small muted">Only words read so far. The "added to pool" line appears once two weeks have pool snapshots (one is taken every day).</p>
     {% endif %}
   </div>
 
@@ -323,7 +323,7 @@
     const w = weeks[i];
     const parts = ['week of ' + w.full, fmt(w.words) + ' words', w.n + ' article' + (w.n === 1 ? '' : 's')];
     if (w.avg) parts.push('avg ' + fmt(w.avg) + ' / article');
-    if (w.added !== null) parts.push('saved +' + fmt(w.added));
+    if (w.added !== null) parts.push('added ' + (w.added < 0 ? '−' : '+') + fmt(Math.abs(w.added)));
     if (w.pool !== null) parts.push('pool ' + fmt(w.pool));
     readout.textContent = parts.join(' · ');
     chart.querySelectorAll('.bar').forEach((b) => b.classList.toggle('is-selected', Number(b.dataset.week) === i));

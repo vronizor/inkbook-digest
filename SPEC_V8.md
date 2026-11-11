@@ -17,8 +17,8 @@ Sidebar: Kiosk (with anchors to Editions, Readers, Press room), Library, schedul
    - The month-ago clause uses the snapshot closest to 30 days ago, within ±7 days; omitted otherwise.
 2. **Chart**, last 12 weeks (Monday-based, local time), toggle remembered per browser:
    - *Weekly*: words sent per week, article count inside each bar, dashed budget line.
-   - *Cumulative*: running total of words read, and read + pool at each week's last snapshot (saved). The gap is the pool. The saved line appears once two weeks have snapshots.
-   - Clicking a week shows words, articles, average length, words saved that week (Δpool + read) and pool size.
+   - *Cumulative*: running total of words read, and words added to the pool since the first snapshot in the window (read + pool − first pool). The gap is pool growth over the window, not the pool itself: the pool can be many times what is read in 12 weeks, which would flatten the read line. The added line appears once two weeks have snapshots; until then the y-axis scales to the read line alone.
+   - Clicking a week shows words, articles, average length, words added that week (Δpool + read) and pool size.
 3. **Editions**: expandable rows (date, articles, words, emailed count, status / failed emails), article list with domain and length, EPUB and email preview links. Six shown, the rest behind "Show older".
 4. **Readers**: subscriber cards (Send latest, Pause, Edit → version, sender name, pool checkbox, remove), add form, recent deliveries; "Sent by readers" list with status: failed, in issue <date> (joined through `sent_articles`), in pool, library.
 5. **Press room**: schedule, budget, email mode, pool tag, with the existing schedule editor behind "Edit"; run log with expandable logs.
