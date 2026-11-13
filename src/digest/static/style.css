@@ -99,11 +99,19 @@ summary.btn::-webkit-details-marker { display: none; }
 .cumul-sel { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .cumul-hit { position: absolute; inset: 0; display: flex; }
 .cumul-hit button { flex: 1; background: transparent; border: 0; cursor: pointer; }
-.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 12px; }
-.legend span { display: inline-flex; align-items: center; gap: 6px; }
 .lg-saved { width: 22px; border-top: 2px dashed var(--ink); }
 .lg-read { width: 22px; border-top: 2.5px solid var(--ink); }
 .lg-gap { width: 14px; height: 10px; background: var(--gap); }
+.ledger { width: 100%; margin-top: 16px; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.ledger th, .ledger td { padding: 5px 0; text-align: right; }
+.ledger th:first-child, .ledger td:first-child { text-align: left; }
+.ledger thead th { font-weight: 400; color: var(--muted); border-bottom: 1px solid var(--rule); }
+.ledger thead th:first-child { color: var(--ink); }
+.ledger td:first-child i { display: inline-block; vertical-align: middle; margin-right: 8px; }
+.ledger-total td { border-top: 1.5px solid var(--ink); font-weight: 600; padding-top: 7px; }
+.ledger-total td:first-child { padding-left: 30px; }
+.ledger-note { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
+.ledger-note i { flex: none; }
 .readout { margin: 16px 0 0; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 13px; }
 
 .edition { border-bottom: 1px solid var(--rule); }

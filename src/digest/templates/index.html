@@ -12,7 +12,7 @@
 <section class="hero">
   <p class="hero-next">{% if is_running %}Printing the next issue now.{% else %}{{ next_phrase }}{% endif %}</p>
   {% if pool_summary %}
-    <p class="hero-pool">About <strong>{{ pool_summary.words }} words</strong> in the pool{% if pool_summary.worth %}, {{ pool_summary.worth }}{% endif %}.{% if pool_summary.trend %} {{ pool_summary.trend }}{% endif %}</p>
+    <p class="hero-pool">About <strong>{{ pool_summary.words }} words</strong> ({{ pool_summary.articles }}) in the pool{% if pool_summary.worth %}, {{ pool_summary.worth }}{% endif %}.{% if pool_summary.trend %} {{ pool_summary.trend }}{% endif %}</p>
   {% else %}
     <p class="hero-pool">Pool size unavailable right now.{% if queue_error %} <small class="mono">{{ queue_error }}</small>{% endif %}</p>
   {% endif %}
@@ -24,7 +24,7 @@
       <h2 class="h2" data-view-only="weekly">How much I read</h2>
       <h2 class="h2" data-view-only="cumul" hidden>Added vs read</h2>
       <p class="mono small muted" data-view-only="weekly">words per week · number in the bar = articles · <span class="budget-key" aria-hidden="true"></span> budget {{ chart.budget_k }}</p>
-      <p class="mono small muted" data-view-only="cumul" hidden>running totals{% if chart.has_pool_history %} since {{ chart.history_from }} · the shaded gap is how much the pool grew{% endif %}</p>
+      <p class="mono small muted" data-view-only="cumul" hidden>running totals{% if chart.has_pool_history %} since {{ chart.history_from }}{% endif %} · tap a week</p>
     </div>
     <div class="seg" role="group" aria-label="Chart view">
       <button type="button" data-view="weekly" aria-pressed="true">Weekly</button>
@@ -60,17 +60,21 @@
       </div>
     </div>
     <div class="axis axis-spread mono">{% for w in chart.weeks %}<span>{{ w.label }}</span>{% endfor %}</div>
-    {% if chart.has_pool_history %}<div class="legend mono small">
-      <span><i class="lg-saved"></i>added to pool</span>
-      <span><i class="lg-read"></i>read</span>
-      <span><i class="lg-gap"></i>gap = pool growth</span>
-    </div>{% endif %}
+    <table class="ledger mono">
+      <thead><tr><th data-l="week"></th><th>words</th><th>articles</th></tr></thead>
+      <tbody>
+        {% if chart.has_pool_history %}<tr><td><i class="lg-saved"></i>added</td><td data-l="added"></td><td data-l="added_n"></td></tr>{% endif %}
+        <tr><td><i class="lg-read"></i>read</td><td data-l="words"></td><td data-l="n"></td></tr>
+        <tr class="ledger-total"><td>in pool</td><td data-l="pool"></td><td data-l="pool_n"></td></tr>
+      </tbody>
+    </table>
+    {% if chart.has_pool_history %}<p class="mono small muted ledger-note"><i class="lg-gap"></i><span data-l="growth"></span></p>{% endif %}
     {% if not chart.has_pool_history %}
     <p class="mono small muted">Only words read so far. The "added to pool" line appears once two weeks have pool snapshots (one is taken every day).</p>
     {% endif %}
   </div>
 
-  <p class="readout mono" id="readout"></p>
+  <p class="readout mono" id="readout" data-view-only="weekly"></p>
 </section>
 
 <section id="editions">
@@ -314,27 +318,36 @@
   const sel = chart.querySelector('.cumul-sel');
   const viewW = {{ chart.view_w }};
   const fmt = (n) => n.toLocaleString('en-US');
-  let current = weeks.length - 1;
-  while (current > 0 && !weeks[current].n) current--;
+  const signed = (n) => n === null ? '–' : (n < 0 ? '−' : '+') + fmt(Math.abs(n));
+  let lastRead = weeks.length - 1;
+  while (lastRead > 0 && !weeks[lastRead].n) lastRead--;
+  let current = lastRead;
+  let picked = false;
 
   function select(i) {
     current = i;
     const w = weeks[i];
-    const parts = ['week of ' + w.full, fmt(w.words) + ' words', w.n + ' article' + (w.n === 1 ? '' : 's')];
-    if (w.added !== null) parts.push('added ' + (w.added < 0 ? '−' : '+') + fmt(Math.abs(w.added)));
-    if (w.pool !== null) parts.push('pool ' + fmt(w.pool));
-    readout.textContent = parts.join(' · ');
+    readout.textContent = ['week of ' + w.full, fmt(w.words) + ' words', w.n + ' article' + (w.n === 1 ? '' : 's')].join(' · ');
+    const cells = {
+      week: 'week of ' + w.full,
+      added: signed(w.added), added_n: signed(w.added_n),
+      words: fmt(w.words), n: fmt(w.n),
+      pool: w.pool === null ? '–' : fmt(w.pool), pool_n: w.pool_n === null ? '–' : fmt(w.pool_n),
+      growth: w.growth === null ? 'gap = pool growth' : 'gap = pool growth since {{ chart.history_from }}: ' + signed(w.growth),
+    };
+    chart.querySelectorAll('[data-l]').forEach((el) => { el.textContent = cells[el.dataset.l]; });
     chart.querySelectorAll('.bar').forEach((b) => b.classList.toggle('is-selected', Number(b.dataset.week) === i));
     const x = weeks.length > 1 ? i / (weeks.length - 1) * viewW : 0;
     sel.setAttribute('x1', x);
     sel.setAttribute('x2', x);
   }
 
-  chart.querySelectorAll('[data-week]').forEach((el) => el.addEventListener('click', () => select(Number(el.dataset.week))));
+  chart.querySelectorAll('[data-week]').forEach((el) => el.addEventListener('click', () => { picked = true; select(Number(el.dataset.week)); }));
   chart.querySelectorAll('[data-view]').forEach((btn) => btn.addEventListener('click', () => {
     const view = btn.dataset.view;
     chart.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
     chart.querySelectorAll('[data-view-only]').forEach((el) => { el.hidden = el.dataset.viewOnly !== view; });
+    if (!picked) select(view === 'cumul' ? weeks.length - 1 : lastRead);
     try { localStorage.setItem('kiosk-chart-view', view); } catch (e) {}
   }));
   try {

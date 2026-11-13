@@ -214,6 +214,7 @@ def dashboard(request: Request):
         if queue_stats is not None:
             pool_summary = pool.summary(
                 queue_stats["total_words"],
+                queue_stats["count"],
                 pool.average_issue_words(conn, word_budget),
                 pool.words_around(conn, side["now"].date() - timedelta(days=pool.MONTH_LOOKBACK_DAYS)),
             )
@@ -242,7 +243,7 @@ def dashboard(request: Request):
             "pool_summary": pool_summary, "queue_error": queue_error,
             "chart": chart,
             "chart_weeks_json": [
-                {k: w[k] for k in ("full", "words", "n", "pool", "added")} for w in chart["weeks"]
+                {k: w[k] for k in ("full", "words", "n", "pool", "pool_n", "added", "added_n", "growth")} for w in chart["weeks"]
             ],
             "totals": totals, "editions": editions, "runs": runs,
             "word_budget": word_budget, "wb_min": WB_MIN, "wb_max": WB_MAX,

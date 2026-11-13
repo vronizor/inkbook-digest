@@ -56,6 +56,12 @@ def approx_words(words: int) -> str:
     return f"{k:.1f}k".replace(".0k", "k") if k < 10 else f"{round(k):,}k"
 
 
+def approx_articles(n: int) -> str:
+    if n < 10:
+        return f"{n} article" + ("" if n == 1 else "s")
+    return f"{n // 10 * 10}+ articles"
+
+
 def _number(n: int) -> str:
     return _NUMBER_WORDS[n] if 0 <= n < len(_NUMBER_WORDS) else str(n)
 
@@ -91,8 +97,11 @@ def words_around(conn: sqlite3.Connection, target: date) -> int | None:
     return best[1]
 
 
-def summary(pool_words: int, avg_issue: int, month_ago: int | None) -> dict:
-    out = {"words": approx_words(pool_words), "worth": issues_worth(pool_words, avg_issue), "trend": ""}
+def summary(pool_words: int, pool_articles: int, avg_issue: int, month_ago: int | None) -> dict:
+    out = {
+        "words": approx_words(pool_words), "articles": approx_articles(pool_articles),
+        "worth": issues_worth(pool_words, avg_issue), "trend": "",
+    }
     if month_ago is not None:
         if month_ago and abs(pool_words - month_ago) / month_ago < 0.05:
             out["trend"] = "About the same as a month ago."
@@ -132,11 +141,15 @@ def weekly(conn: sqlite3.Connection, tz: str, today: date, weeks: int = CHART_WE
         if wk in buckets:
             buckets[wk]["words"] += words or 0
             buckets[wk]["n"] += 1
-    pool_end: dict[date, int] = {}
+    pool_end: dict[date, dict] = {}
     for snap in store.pool_snapshots(conn, first.isoformat()):
-        pool_end[monday(date.fromisoformat(snap["day"]))] = snap["words"]
+        pool_end[monday(date.fromisoformat(snap["day"]))] = snap
     return [
-        {"monday": wk, "words": b["words"], "n": b["n"], "pool": pool_end.get(wk)}
+        {
+            "monday": wk, "words": b["words"], "n": b["n"],
+            "pool": pool_end[wk]["words"] if wk in pool_end else None,
+            "pool_n": pool_end[wk]["articles"] if wk in pool_end else None,
+        }
         for wk, b in sorted(buckets.items())
     ]
 
@@ -172,15 +185,19 @@ def chart_view(rows: list[dict], budget: int) -> dict:
 
     weeks, prev = [], None
     for i, r in enumerate(rows):
-        prev_pool = rows[i - 1]["pool"] if i else None
-        added = r["pool"] - prev_pool + r["words"] if r["pool"] is not None and prev_pool is not None else None
+        before = rows[i - 1] if i else None
+        has_pair = r["pool"] is not None and before is not None and before["pool"] is not None
+        added = r["pool"] - before["pool"] + r["words"] if has_pair else None
+        added_n = r["pool_n"] - before["pool_n"] + r["n"] if has_pair else None
         weeks.append({
             "label": _label(r["monday"], prev),
             "full": f"{r['monday'].day} {r['monday']:%b}",
             "words": r["words"], "n": r["n"],
             "words_k": approx_words(r["words"]) if r["words"] else "",
             "h": round(r["words"] / top * 100, 1),
-            "pool": r["pool"], "added": added, "x": xs[i],
+            "pool": r["pool"], "pool_n": r["pool_n"], "added": added, "added_n": added_n,
+            "growth": r["pool"] - base if r["pool"] is not None and has_history else None,
+            "x": xs[i],
         })
         prev = r["monday"]
     return {

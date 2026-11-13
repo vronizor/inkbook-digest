@@ -24,10 +24,20 @@ class PhrasingTest(unittest.TestCase):
         self.assertEqual(pool.issues_worth(5_000, 17_500), "less than one issue's worth")
         self.assertEqual(pool.issues_worth(300_000, 15_000), "roughly 20 issues' worth")
 
+    def test_approx_articles(self):
+        self.assertEqual(pool.approx_articles(1), "1 article")
+        self.assertEqual(pool.approx_articles(7), "7 articles")
+        self.assertEqual(pool.approx_articles(10), "10+ articles")
+        self.assertEqual(pool.approx_articles(43), "40+ articles")
+        self.assertEqual(pool.approx_articles(49), "40+ articles")
+
+    def test_summary_articles(self):
+        self.assertEqual(pool.summary(61_400, 43, 15_000, None)["articles"], "40+ articles")
+
     def test_summary_trend(self):
-        self.assertEqual(pool.summary(61_400, 15_000, None)["trend"], "")
-        self.assertEqual(pool.summary(61_400, 15_000, 50_200)["trend"], "A month ago it was around 50k.")
-        self.assertEqual(pool.summary(61_400, 15_000, 60_000)["trend"], "About the same as a month ago.")
+        self.assertEqual(pool.summary(61_400, 43, 15_000, None)["trend"], "")
+        self.assertEqual(pool.summary(61_400, 43, 15_000, 50_200)["trend"], "A month ago it was around 50k.")
+        self.assertEqual(pool.summary(61_400, 43, 15_000, 60_000)["trend"], "About the same as a month ago.")
 
     def test_next_issue_phrase(self):
         now = datetime(2026, 11, 11, 7, 0, tzinfo=ZoneInfo(TZ))
@@ -72,25 +82,28 @@ class WeeklyTest(unittest.TestCase):
         self.assertEqual([r["monday"] for r in rows], [date(2026, 10, 26), date(2026, 11, 2), date(2026, 11, 9)])
         self.assertEqual([(r["words"], r["n"]) for r in rows], [(5000, 1), (8000, 3), (0, 0)])
         self.assertEqual([r["pool"] for r in rows], [52_000, 55_000, None])
+        self.assertEqual([r["pool_n"] for r in rows], [11, 12, None])
 
     def test_chart_view_cumulative_and_added(self):
         rows = [
-            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": 52_000},
-            {"monday": date(2026, 11, 2), "words": 8000, "n": 3, "pool": 55_000},
-            {"monday": date(2026, 11, 9), "words": 0, "n": 0, "pool": None},
+            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": 52_000, "pool_n": 10},
+            {"monday": date(2026, 11, 2), "words": 8000, "n": 3, "pool": 55_000, "pool_n": 12},
+            {"monday": date(2026, 11, 9), "words": 0, "n": 0, "pool": None, "pool_n": None},
         ]
         view = pool.chart_view(rows, 15_000)
         self.assertTrue(view["has_pool_history"])
         self.assertEqual(view["weeks"][1]["added"], 55_000 - 52_000 + 8000)
         self.assertIsNone(view["weeks"][0]["added"])
+        self.assertEqual(view["weeks"][1]["added_n"], 12 - 10 + 3)
+        self.assertEqual([w["growth"] for w in view["weeks"]], [0, 3000, None])
         self.assertEqual([w["label"] for w in view["weeks"]], ["26 Oct", "2 Nov", "9"])
         self.assertEqual(len(view["read_pts"].split()), 3)
         self.assertEqual(len(view["saved_pts"].split()), 2)
 
     def test_cumulative_gap_is_pool_growth(self):
         rows = [
-            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": 160_000},
-            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 170_000},
+            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": 160_000, "pool_n": 10},
+            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 170_000, "pool_n": 10},
         ]
         view = pool.chart_view(rows, 4000)
         saved_first = view["saved_pts"].split()[0]
@@ -100,8 +113,8 @@ class WeeklyTest(unittest.TestCase):
 
     def test_single_snapshot_does_not_set_scale(self):
         rows = [
-            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": None},
-            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 160_000},
+            {"monday": date(2026, 10, 26), "words": 5000, "n": 1, "pool": None, "pool_n": None},
+            {"monday": date(2026, 11, 2), "words": 3000, "n": 1, "pool": 160_000, "pool_n": 10},
         ]
         view = pool.chart_view(rows, 4000)
         self.assertFalse(view["has_pool_history"])
