@@ -96,7 +96,7 @@ class WeeklyTest(unittest.TestCase):
         self.assertIsNone(view["weeks"][0]["added"])
         self.assertEqual(view["weeks"][1]["added_n"], 12 - 10 + 3)
         self.assertEqual([w["growth"] for w in view["weeks"]], [0, 3000, None])
-        self.assertEqual([w["label"] for w in view["weeks"]], ["26 Oct", "2 Nov", "9"])
+        self.assertEqual([(w["day"], w["month"]) for w in view["weeks"]], [(26, "Oct"), (2, "Nov"), (9, "")])
         self.assertEqual(len(view["read_pts"].split()), 3)
         self.assertEqual(len(view["saved_pts"].split()), 2)
 

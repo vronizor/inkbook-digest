@@ -154,8 +154,8 @@ def weekly(conn: sqlite3.Connection, tz: str, today: date, weeks: int = CHART_WE
     ]
 
 
-def _label(wk: date, prev: date | None) -> str:
-    return f"{wk.day} {wk:%b}" if prev is None or prev.month != wk.month else str(wk.day)
+def _month(wk: date, prev: date | None) -> str:
+    return f"{wk:%b}" if prev is None or prev.month != wk.month else ""
 
 
 def chart_view(rows: list[dict], budget: int) -> dict:
@@ -190,7 +190,7 @@ def chart_view(rows: list[dict], budget: int) -> dict:
         added = r["pool"] - before["pool"] + r["words"] if has_pair else None
         added_n = r["pool_n"] - before["pool_n"] + r["n"] if has_pair else None
         weeks.append({
-            "label": _label(r["monday"], prev),
+            "day": r["monday"].day, "month": _month(r["monday"], prev),
             "full": f"{r['monday'].day} {r['monday']:%b}",
             "words": r["words"], "n": r["n"],
             "words_k": approx_words(r["words"]) if r["words"] else "",
