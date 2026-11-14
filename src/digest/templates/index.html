@@ -212,7 +212,7 @@
     <div data-more-list>
       {% for l in links %}
       <div class="link-row"{% if loop.index > 8 %} data-more hidden{% endif %}>
-        <span class="link-main"><a href="{{ l.url }}">{{ l.title or l.url|domain }}</a><br><span class="mono small muted">{{ l.url|domain }} · from {{ l.sender_tag }} · {{ (l.saved_at|when).split(",")[0] }}</span></span>
+        <span class="link-main"><a href="{{ l.url }}">{{ l.title or l.url|domain }}</a><br><span class="mono small muted">{{ l.url|domain }} · from {{ l.sender_tag }} · {{ (l.saved_at|when).split(",")[0] }}{% if l.issue %} → {{ l.issue }}{% endif %}</span></span>
         <span class="chip mono{% if l.state == 'failed' %} chip-alert{% endif %}"{% if l.error %} title="{{ l.error }}"{% endif %}>{{ l.state }}</span>
       </div>
       {% endfor %}

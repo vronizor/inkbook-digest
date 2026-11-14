@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS intake_links (
   status TEXT NOT NULL,
   error TEXT,
   saved_at TEXT NOT NULL,
+  to_pool INTEGER,
   UNIQUE (email_document_id, url)
 );
 
@@ -111,6 +112,7 @@ ADDITIVE_ALTERS = (
     "ALTER TABLE subscribers ADD COLUMN to_pool INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE subscribers ADD COLUMN sender_name TEXT",
     "ALTER TABLE pool_snapshots ADD COLUMN source TEXT NOT NULL DEFAULT 'live'",
+    "ALTER TABLE intake_links ADD COLUMN to_pool INTEGER",
 )
 
 
@@ -427,12 +429,14 @@ def record_intake_link(
     *,
     reader_document_id: str | None = None,
     error: str | None = None,
+    to_pool: bool | None = None,
 ) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO intake_links "
-        "(email_document_id, url, sender_tag, reader_document_id, status, error, saved_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (email_document_id, url, sender_tag, reader_document_id, status, error, _now()),
+        "(email_document_id, url, sender_tag, reader_document_id, status, error, saved_at, to_pool) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (email_document_id, url, sender_tag, reader_document_id, status, error, _now(),
+         None if to_pool is None else int(to_pool)),
     )
 
 
@@ -476,7 +480,7 @@ def pool_snapshots(conn: sqlite3.Connection, since_day: str) -> list[dict]:
 
 def recent_intake_links_with_issue(conn: sqlite3.Connection, limit: int = 30) -> list[dict]:
     rows = conn.execute(
-        "SELECT l.url, l.sender_tag, l.status, l.error, l.saved_at, a.title, d.sent_at "
+        "SELECT l.url, l.sender_tag, l.status, l.error, l.saved_at, a.title, d.sent_at, d.volume, l.to_pool "
         "FROM intake_links l "
         "LEFT JOIN sent_articles a ON a.reader_document_id = l.reader_document_id "
         "LEFT JOIN digests d ON d.id = a.digest_id "
@@ -486,7 +490,8 @@ def recent_intake_links_with_issue(conn: sqlite3.Connection, limit: int = 30) ->
     return [
         {
             "url": r[0], "sender_tag": r[1], "status": r[2], "error": r[3], "saved_at": r[4],
-            "title": r[5], "issue_sent_at": r[6],
+            "title": r[5], "issue_sent_at": r[6], "issue_volume": r[7],
+            "to_pool": None if r[8] is None else bool(r[8]),
         }
         for r in rows
     ]

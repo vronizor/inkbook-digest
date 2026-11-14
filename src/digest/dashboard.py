@@ -152,10 +152,18 @@ def _link_state(link: dict, pool_by_tag: dict[str, bool]) -> str:
     if link["status"] == "error":
         return "failed"
     if link["issue_sent_at"]:
-        return f"in issue {_when(link['issue_sent_at']).split(',')[0]}"
-    if link["sender_tag"] in pool_by_tag:
-        return "in pool" if pool_by_tag[link["sender_tag"]] else "library"
-    return "saved"
+        return "printed"
+    to_pool = link["to_pool"] if link["to_pool"] is not None else pool_by_tag.get(link["sender_tag"])
+    if to_pool is None:
+        return "untracked"
+    return "in pool" if to_pool else "library"
+
+
+def _link_issue(link: dict) -> str:
+    if not link["issue_sent_at"]:
+        return ""
+    day = _when(link["issue_sent_at"]).split(",")[0]
+    return f"{day} · vol. {link['issue_volume']}" if (link["issue_volume"] or 1) > 1 else day
 
 
 def _sidebar(cfg, conn, request: Request) -> dict:
@@ -225,10 +233,11 @@ def dashboard(request: Request):
         for sub in subscribers:
             sub["last"] = last_delivery.get(sub["email"])
             sub["tag"] = intake.subscriber_tag(sub)
-        pool_by_tag = {s["tag"]: s["to_pool"] for s in subscribers}
+        pool_by_tag = {tag: to_pool for _, tag, to_pool in intake.senders(cfg, conn)}
         links = store.recent_intake_links_with_issue(conn, TABLE_LIMIT)
         for link in links:
             link["state"] = _link_state(link, pool_by_tag)
+            link["issue"] = _link_issue(link)
         deliveries = store.recent_deliveries(conn, DELIVERY_LIMIT)
     finally:
         conn.close()

@@ -199,6 +199,18 @@ class SubscriberSendersTest(unittest.TestCase):
         self._run(fake)
         self.assertEqual(fake.saved, [("https://a.com/1", ["eero"])])
 
+    def test_link_records_pool_choice_at_intake(self):
+        store.add_subscriber(self.conn, "jeff@example.org", "Jeff", "both", to_pool=True, sender_name="Jeff Pagel")
+        store.add_subscriber(self.conn, "eero@example.org", "Eero", "teaser", sender_name="Eero M")
+        fake = FakeReader([
+            _email(1, "<p>https://a.com/1</p>", author="Jeff Pagel"),
+            _email(2, "<p>https://b.com/2</p>", author="Eero M"),
+            _email(3, "<p>https://c.com/3</p>", author="Vincent Thorne"),
+        ])
+        self._run(fake)
+        pooled = {l["url"]: l["to_pool"] for l in store.recent_intake_links_with_issue(self.conn)}
+        self.assertEqual(pooled, {"https://a.com/1": True, "https://b.com/2": False, "https://c.com/3": True})
+
     def test_subscriber_without_sender_name_is_not_a_sender(self):
         store.add_subscriber(self.conn, "eero@example.org", "Eero", "teaser")
         self.assertNotIn("eero", [tag for _, tag, _ in intake.senders(self.cfg, self.conn)])

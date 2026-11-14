@@ -136,7 +136,7 @@ def process_email(
                 reader.add_tags(new_id, tag_names(existing or {}), article_tags)
             store.record_intake_link(
                 conn, doc["id"], url, sender_tag,
-                "saved" if created else "existing", reader_document_id=new_id,
+                "saved" if created else "existing", reader_document_id=new_id, to_pool=to_pool,
             )
             saved += 1
             log.info(f"intake: saved {url} ({'new' if created else 'already in Reader'})")
