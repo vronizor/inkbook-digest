@@ -39,6 +39,7 @@ Conventions for working on this repo.
 
 - The Reader API has two unverified assumptions in SPEC.md (server-side tag filter, PATCH for tag mutation). **Verify these with a real API call before writing code that depends on them.** Use a throwaway script with the user's token. If verification fails, implement the documented fallback.
 - Run `docker compose up --build` locally before declaring deployment ready.
+- The Pi deploys release tags on its own: a push to `main` deploys nothing; a new `vX.Y` tag on main is built, checked and rolled back if it fails, within 5 minutes. Tag only when the owner asks for a release. Don't tell the owner to `git pull` on the Pi; by hand it is `deploy kiosk [REF]`.
 - Test the `--once` flag works inside the running container.
 
 ## Communication style with the user

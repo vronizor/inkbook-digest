@@ -181,6 +181,8 @@ Tailscale-only, no auth. After `docker compose up -d`, browse to `http://<pi>:80
 6. Browse `http://<pi-host>:8080/` (over Tailscale) — dashboard should load.
 7. On the Inkbook, add the OPDS catalog URL to KOReader (see above).
 
+Update: push a release tag (`git tag v1.2 && git push origin v1.2`, or a release on GitHub). The Pi deploys it within 5 minutes and rolls back if it doesn't come up; pushing to `main` alone deploys nothing. By hand on the Pi: `deploy kiosk`. Don't `git pull` in the Pi's checkout.
+
 ## Dry test
 
 Tag a fresh article in Reader as `toepub`, then either:
